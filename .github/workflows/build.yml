@@ -16,6 +16,8 @@ env:
   GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.caching=true
   NDK_VERSION: 29.0.14206865
   CMAKE_VERSION: 4.4.2
+  COMPILE_SDK: '37.0'
+  BUILD_TOOLS_VERSION: 37.0.0
 
 jobs:
   build:
@@ -40,11 +42,13 @@ jobs:
         run: |
           yes | sdkmanager --licenses >/dev/null || true
 
+          # These packages ship with the runner image; installing them is a
+          # no-op there. The verification step below is the real gate.
           sdkmanager --install \
             "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0" \
-            "ndk;${NDK_VERSION}"
+            "platforms;android-${COMPILE_SDK}" \
+            "build-tools;${BUILD_TOOLS_VERSION}" \
+            "ndk;${NDK_VERSION}" || true
 
       - name: Verify Android SDK
         shell: bash
@@ -53,8 +57,8 @@ jobs:
           sdkmanager --version
           sdkmanager --list_installed
 
-          test -d "$ANDROID_HOME/platforms/android-36"
-          test -d "$ANDROID_HOME/build-tools/36.0.0"
+          test -d "$ANDROID_HOME/platforms/android-${COMPILE_SDK}"
+          test -d "$ANDROID_HOME/build-tools/${BUILD_TOOLS_VERSION}"
           test -d "$ANDROID_HOME/ndk/${NDK_VERSION}"
 
       - name: Setup CMake 4.4.2
@@ -80,6 +84,28 @@ jobs:
 
           "$CMAKE_DIR/bin/cmake" --version
 
+          # The Kitware archive ships without Ninja, which the Android Gradle
+          # plugin expects next to the CMake binary it is pointed at.
+          if [ ! -x "$CMAKE_DIR/bin/ninja" ]; then
+            SDK_NINJA="$(find "$ANDROID_HOME/cmake" -name ninja -type f 2>/dev/null | sort | tail -n 1)"
+
+            if [ -n "$SDK_NINJA" ]; then
+              cp "$SDK_NINJA" "$CMAKE_DIR/bin/ninja"
+            else
+              sudo apt-get update
+              sudo apt-get install -y ninja-build
+              cp "$(command -v ninja)" "$CMAKE_DIR/bin/ninja"
+            fi
+          fi
+
+          chmod +x "$CMAKE_DIR/bin/ninja"
+          "$CMAKE_DIR/bin/ninja" --version
+
+          # CMake 4.4.2 is not published as an SDK package, so point the
+          # Android Gradle plugin at this installation explicitly.
+          echo "cmake.dir=$CMAKE_DIR" >> local.properties
+          cat local.properties
+
       - name: Verify project
         shell: bash
         run: |
@@ -87,13 +113,8 @@ jobs:
           test -f settings.gradle.kts
           test -f Tank/build.gradle.kts
           test -f gradlew
-
-      - name: Generate Gradle Wrapper
-        shell: bash
-        run: |
-          gradle wrapper \
-            --gradle-version 9.5 \
-            --distribution-type bin
+          test -f gradle/wrapper/gradle-wrapper.jar
+          test -f gradle/wrapper/gradle-wrapper.properties
 
       - name: Make Gradle Wrapper executable
         shell: bash
