@@ -1,0 +1,8 @@
+<resources>
+    <color name="icon_background">#071019</color>
+    <color name="surface">#101923</color>
+    <color name="surface_elevated">#172331</color>
+    <color name="accent">#D6A84A</color>
+    <color name="text_primary">#F4F7FA</color>
+    <color name="text_secondary">#AAB6C2</color>
+</resources>

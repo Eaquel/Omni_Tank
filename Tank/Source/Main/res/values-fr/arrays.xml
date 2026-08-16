@@ -1,0 +1,13 @@
+<resources>
+    <string-array name="graphics_quality_options">
+        <item>Faible</item>
+        <item>Moyen</item>
+        <item>Élevé</item>
+        <item>Ultra</item>
+    </string-array>
+    <string-array name="hull_profile_options">
+        <item>Standard</item>
+        <item>Reconnaissance</item>
+        <item>Lourd</item>
+    </string-array>
+</resources>
