@@ -1,4 +1,4 @@
-name: Omni Tank Android
+name: Android Build
 
 on:
   push:
@@ -12,21 +12,16 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: omni-tank-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+env:
+  GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.caching=true
+  ANDROID_HOME: ${{ runner.tool_cache }}/android-sdk
+  ANDROID_SDK_ROOT: ${{ runner.tool_cache }}/android-sdk
+  NDK_VERSION: 29.0.14206865
+  CMAKE_VERSION: 4.4.2
 
 jobs:
   build:
-    name: Android Build
     runs-on: ubuntu-24.04
-
-    env:
-      GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.caching=true
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      NDK_VERSION: 29.0.14206865
-      CMAKE_VERSION: 4.4.2
 
     steps:
       - name: Checkout
@@ -40,90 +35,80 @@ jobs:
           cache: gradle
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v4.0.1
+        uses: android-actions/setup-android@v4
 
-      - name: Accept Android SDK licenses
+      - name: Install Android SDK packages
         shell: bash
         run: |
           yes | sdkmanager --licenses >/dev/null || true
 
-      - name: Install Android SDK
-        shell: bash
-        run: |
-          sdkmanager --install "platform-tools"
-          sdkmanager --install "platforms;android-37"
-          sdkmanager --install "build-tools;37.0.0"
-          sdkmanager --install "ndk;${NDK_VERSION}"
-
-      - name: Install CMake 4.4.2
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          CMAKE_ROOT="${RUNNER_TEMP}/cmake-${CMAKE_VERSION}"
-          CMAKE_ARCHIVE="${RUNNER_TEMP}/cmake-${CMAKE_VERSION}.tar.gz"
-
-          rm -rf "${CMAKE_ROOT}"
-          rm -f "${CMAKE_ARCHIVE}"
-
-          curl \
-            --fail \
-            --location \
-            --retry 5 \
-            --retry-delay 2 \
-            --retry-all-errors \
-            "https://cmake.org/files/v4.4/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" \
-            --output "${CMAKE_ARCHIVE}"
-
-          mkdir -p "${CMAKE_ROOT}"
-
-          tar \
-            --extract \
-            --gzip \
-            --file "${CMAKE_ARCHIVE}" \
-            --directory "${CMAKE_ROOT}" \
-            --strip-components=1
-
-          test -x "${CMAKE_ROOT}/bin/cmake"
-
-          echo "${CMAKE_ROOT}/bin" >> "${GITHUB_PATH}"
-
-      - name: Verify Java
-        shell: bash
-        run: |
-          java -version
-          javac -version
-
-      - name: Verify CMake
-        shell: bash
-        run: |
-          cmake --version
-          test "$(cmake --version | head -n 1)" = "cmake version ${CMAKE_VERSION}"
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;${NDK_VERSION}"
 
       - name: Verify Android SDK
         shell: bash
         run: |
-          test -d "${ANDROID_SDK_ROOT}/platforms/android-37"
-          test -d "${ANDROID_SDK_ROOT}/build-tools/37.0.0"
-          test -d "${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
+          sdkmanager --list_installed
+          java -version
+          sdkmanager --version
+          ls -la "$ANDROID_HOME/platforms/android-36"
+          ls -la "$ANDROID_HOME/build-tools/36.0.0"
+          ls -la "$ANDROID_HOME/ndk/$NDK_VERSION"
 
-      - name: Verify Gradle
+      - name: Setup CMake 4.4.2
         shell: bash
         run: |
-          chmod +x ./gradlew
-          ./gradlew --version
+          CMAKE_DIR="$RUNNER_TEMP/cmake-${CMAKE_VERSION}"
+
+          curl -L \
+            --fail \
+            --retry 5 \
+            --retry-delay 2 \
+            -o "$RUNNER_TEMP/cmake.tar.gz" \
+            "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz"
+
+          mkdir -p "$CMAKE_DIR"
+
+          tar -xzf \
+            "$RUNNER_TEMP/cmake.tar.gz" \
+            --strip-components=1 \
+            -C "$CMAKE_DIR"
+
+          echo "$CMAKE_DIR/bin" >> "$GITHUB_PATH"
+
+          "$CMAKE_DIR/bin/cmake" --version
+
+      - name: Verify project
+        shell: bash
+        run: |
+          test -f build.gradle.kts
+          test -f settings.gradle.kts
+          test -f Tank/build.gradle.kts
+          test -f Source/Main/Native/CMakeLists.txt || test -f Tank/Source/Main/Native/CMakeLists.txt
+
+      - name: Generate Gradle Wrapper
+        shell: bash
+        run: |
+          gradle wrapper --gradle-version 9.5 --distribution-type bin
+
+      - name: Make Gradle Wrapper executable
+        shell: bash
+        run: |
+          chmod +x gradlew
 
       - name: Build Debug APK
         shell: bash
         run: |
-          ./gradlew clean assembleDebug \
-            --stacktrace \
-            --warning-mode all
+          ./gradlew assembleDebug --stacktrace --no-daemon
 
       - name: Upload Debug APK
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
-          name: Omni-Tank-debug
-          path: Tank/build/outputs/apk/debug/*.apk
+          name: Omni_Tank-debug
+          path: |
+            Tank/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
