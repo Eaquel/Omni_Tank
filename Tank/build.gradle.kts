@@ -5,6 +5,7 @@ plugins {
 android {
     namespace = "com.omni.tank"
     compileSdk = 37
+    ndkVersion = "29.0.14206865"
 
     defaultConfig {
         applicationId = "com.omni.tank"
@@ -27,7 +28,7 @@ android {
     externalNativeBuild {
         cmake {
             path = file("Source/Main/Native/CMakeLists.txt")
-            version = "4.4.3"
+            version = "4.4.2"
         }
     }
 
@@ -38,10 +39,6 @@ android {
             kotlin.srcDirs("Source/Main/Kotlin")
             res.srcDirs("Source/Main/res")
         }
-    }
-
-    buildFeatures {
-        buildConfig = true
     }
 
     buildTypes {
