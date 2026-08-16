@@ -12,9 +12,11 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "1.0.0"
+
         ndk {
             abiFilters += "arm64-v8a"
         }
+
         externalNativeBuild {
             cmake {
                 cppFlags += "-std=c++26"
@@ -46,10 +48,13 @@ android {
         debug {
             isDebuggable = true
         }
+
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt")
+            )
             signingConfig = signingConfigs.getByName("debug")
         }
     }
@@ -61,6 +66,12 @@ android {
 
     kotlin {
         jvmToolchain(25)
+
+        compilerOptions {
+            jvmTarget.set(
+                org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_25
+            )
+        }
     }
 }
 
