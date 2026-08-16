@@ -14,8 +14,6 @@ permissions:
 
 env:
   GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.caching=true
-  ANDROID_HOME: ${{ runner.tool_cache }}/android-sdk
-  ANDROID_SDK_ROOT: ${{ runner.tool_cache }}/android-sdk
   NDK_VERSION: 29.0.14206865
   CMAKE_VERSION: 4.4.2
 
@@ -51,12 +49,13 @@ jobs:
       - name: Verify Android SDK
         shell: bash
         run: |
-          sdkmanager --list_installed
           java -version
           sdkmanager --version
-          ls -la "$ANDROID_HOME/platforms/android-36"
-          ls -la "$ANDROID_HOME/build-tools/36.0.0"
-          ls -la "$ANDROID_HOME/ndk/$NDK_VERSION"
+          sdkmanager --list_installed
+
+          test -d "$ANDROID_HOME/platforms/android-36"
+          test -d "$ANDROID_HOME/build-tools/36.0.0"
+          test -d "$ANDROID_HOME/ndk/${NDK_VERSION}"
 
       - name: Setup CMake 4.4.2
         shell: bash
@@ -87,12 +86,14 @@ jobs:
           test -f build.gradle.kts
           test -f settings.gradle.kts
           test -f Tank/build.gradle.kts
-          test -f Source/Main/Native/CMakeLists.txt || test -f Tank/Source/Main/Native/CMakeLists.txt
+          test -f gradlew
 
       - name: Generate Gradle Wrapper
         shell: bash
         run: |
-          gradle wrapper --gradle-version 9.5 --distribution-type bin
+          gradle wrapper \
+            --gradle-version 9.5 \
+            --distribution-type bin
 
       - name: Make Gradle Wrapper executable
         shell: bash
@@ -108,7 +109,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Omni_Tank-debug
-          path: |
-            Tank/build/outputs/apk/debug/*.apk
+          path: Tank/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
