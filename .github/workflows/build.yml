@@ -37,27 +37,21 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4.0.1
+        with:
+          packages: ''
 
-      - name: Refresh SDK repositories
+      - name: Install CMake 4.4.3
         run: |
-          sdkmanager --update
-
-      - name: Install Android SDK packages
-        run: |
-          sdkmanager "platform-tools"
-          sdkmanager "platforms;android-37"
-          sdkmanager "build-tools;37.0.0"
           sdkmanager "cmake;4.4.3"
-
-      - name: Accept Android SDK licenses
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
 
       - name: Verify Android SDK
         run: |
-          sdkmanager --list_installed
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
           test -d "$ANDROID_SDK_ROOT/platforms/android-37"
-          test -d "$ANDROID_SDK_ROOT/cmake/4.4.3"
+          test -d "$ANDROID_SDK_ROOT/build-tools/37.0.0"
+          echo "Android 37 detected"
+          echo "Build Tools 37.0.0 detected"
 
       - name: Verify CMake
         run: |
