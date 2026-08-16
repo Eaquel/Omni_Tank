@@ -38,28 +38,35 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4.0.1
 
+      - name: Refresh SDK repositories
+        run: |
+          sdkmanager --update
+
       - name: Install Android SDK packages
         run: |
-          sdkmanager "platform-tools" "platforms;android-37" "build-tools;37.0.0" "cmake;4.4.3"
+          sdkmanager "platform-tools"
+          sdkmanager "platforms;android-37"
+          sdkmanager "build-tools;37.0.0"
+          sdkmanager "cmake;4.4.3"
 
       - name: Accept Android SDK licenses
         run: |
           yes | sdkmanager --licenses >/dev/null || true
 
-      - name: Verify Java
-        run: |
-          java -version
-          javac -version
-
       - name: Verify Android SDK
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
           sdkmanager --list_installed
+          test -d "$ANDROID_SDK_ROOT/platforms/android-37"
+          test -d "$ANDROID_SDK_ROOT/cmake/4.4.3"
 
       - name: Verify CMake
         run: |
           "$ANDROID_SDK_ROOT/cmake/4.4.3/bin/cmake" --version
+
+      - name: Verify Java
+        run: |
+          java -version
+          javac -version
 
       - name: Grant Gradle permission
         run: chmod +x ./gradlew
