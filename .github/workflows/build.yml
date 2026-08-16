@@ -40,9 +40,9 @@ jobs:
         with:
           packages: ''
 
-      - name: Install CMake 4.4.3
+      - name: Install CMake 4.4.2
         run: |
-          sdkmanager "cmake;4.4.3"
+          sdkmanager "cmake;4.4.2"
 
       - name: Verify Android SDK
         run: |
@@ -55,7 +55,7 @@ jobs:
 
       - name: Verify CMake
         run: |
-          "$ANDROID_SDK_ROOT/cmake/4.4.3/bin/cmake" --version
+          "$ANDROID_SDK_ROOT/cmake/4.4.2/bin/cmake" --version
 
       - name: Verify Java
         run: |
