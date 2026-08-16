@@ -4,10 +4,38 @@
         <item>Moyen</item>
         <item>Élevé</item>
         <item>Ultra</item>
+        <item>Extrême</item>
     </string-array>
     <string-array name="hull_profile_options">
         <item>Standard</item>
         <item>Reconnaissance</item>
         <item>Lourd</item>
+    </string-array>
+    <string-array name="game_mode_options">
+        <item>Histoire</item>
+        <item>Arène</item>
+        <item>Survie</item>
+        <item>Entraînement</item>
+        <item>Expédition</item>
+    </string-array>
+    <string-array name="ability_options">
+        <item>Bouclier Aegis</item>
+        <item>Surrégime</item>
+        <item>Réparation</item>
+        <item>Balayage</item>
+    </string-array>
+    <string-array name="shader_mode_options">
+        <item>Néon</item>
+        <item>Classique</item>
+        <item>Thermique</item>
+        <item>Plan</item>
+        <item>Noir</item>
+    </string-array>
+    <string-array name="language_options">
+        <item>Türkçe</item>
+        <item>English</item>
+        <item>Deutsch</item>
+        <item>Español</item>
+        <item>Français</item>
     </string-array>
 </resources>

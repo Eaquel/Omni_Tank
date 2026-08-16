@@ -24,6 +24,13 @@
         <item>Repair</item>
         <item>Scan</item>
     </string-array>
+    <string-array name="shader_mode_options">
+        <item>Neon</item>
+        <item>Classic</item>
+        <item>Thermal</item>
+        <item>Blueprint</item>
+        <item>Noir</item>
+    </string-array>
     <string-array name="language_options">
         <item>Türkçe</item>
         <item>English</item>

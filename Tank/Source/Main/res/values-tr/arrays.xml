@@ -4,10 +4,38 @@
         <item>Orta</item>
         <item>Yüksek</item>
         <item>Ultra</item>
+        <item>Uç</item>
     </string-array>
     <string-array name="hull_profile_options">
         <item>Standart</item>
         <item>Keşif</item>
         <item>Ağır</item>
+    </string-array>
+    <string-array name="game_mode_options">
+        <item>Hikâye</item>
+        <item>Arena</item>
+        <item>Hayatta Kalma</item>
+        <item>Antrenman</item>
+        <item>Sefer</item>
+    </string-array>
+    <string-array name="ability_options">
+        <item>Aegis Kalkanı</item>
+        <item>Aşırı Yükleme</item>
+        <item>Onarım</item>
+        <item>Tarama</item>
+    </string-array>
+    <string-array name="shader_mode_options">
+        <item>Neon</item>
+        <item>Klasik</item>
+        <item>Termal</item>
+        <item>Teknik Çizim</item>
+        <item>Siyah Beyaz</item>
+    </string-array>
+    <string-array name="language_options">
+        <item>Türkçe</item>
+        <item>English</item>
+        <item>Deutsch</item>
+        <item>Español</item>
+        <item>Français</item>
     </string-array>
 </resources>

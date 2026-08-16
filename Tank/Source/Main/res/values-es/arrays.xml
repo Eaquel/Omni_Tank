@@ -4,10 +4,38 @@
         <item>Medio</item>
         <item>Alto</item>
         <item>Ultra</item>
+        <item>Extremo</item>
     </string-array>
     <string-array name="hull_profile_options">
         <item>Estándar</item>
         <item>Reconocimiento</item>
         <item>Pesado</item>
+    </string-array>
+    <string-array name="game_mode_options">
+        <item>Historia</item>
+        <item>Arena</item>
+        <item>Supervivencia</item>
+        <item>Práctica</item>
+        <item>Expedición</item>
+    </string-array>
+    <string-array name="ability_options">
+        <item>Escudo Aegis</item>
+        <item>Sobremarcha</item>
+        <item>Reparación</item>
+        <item>Escaneo</item>
+    </string-array>
+    <string-array name="shader_mode_options">
+        <item>Neón</item>
+        <item>Clásico</item>
+        <item>Térmico</item>
+        <item>Plano</item>
+        <item>Noir</item>
+    </string-array>
+    <string-array name="language_options">
+        <item>Türkçe</item>
+        <item>English</item>
+        <item>Deutsch</item>
+        <item>Español</item>
+        <item>Français</item>
     </string-array>
 </resources>
