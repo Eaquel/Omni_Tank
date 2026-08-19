@@ -11,14 +11,19 @@ namespace {
 constexpr float pi = 3.14159265358979f;
 constexpr float two_pi = 6.28318530717959f;
 constexpr float to_degrees = 57.2957795f;
+constexpr float to_radians = 0.0174532925f;
 
-constexpr float player_radius = 46.0f;
-constexpr float enemy_radius = 42.0f;
+constexpr float base_rate = 2.6f;
+constexpr float base_damage = 15.0f;
+constexpr float base_bullet_speed = 780.0f;
+constexpr float base_bullet_life = 1.5f;
+constexpr float base_bullet_radius = 8.0f;
+constexpr float base_move_speed = 320.0f;
+constexpr float base_health = 100.0f;
 
-constexpr std::array<float, ability_count> ability_cost{30.0f, 24.0f, 34.0f, 22.0f};
-constexpr std::array<float, ability_count> ability_cooldown{12.0f, 8.0f, 18.0f, 14.0f};
-
-constexpr std::int32_t max_upgrade_level = 8;
+constexpr float player_radius = 44.0f;
+constexpr float bot_radius = 42.0f;
+constexpr float match_length = 600.0f;
 
 float wrapAngle(float angle) noexcept {
     while (angle > pi) angle -= two_pi;
@@ -41,37 +46,278 @@ float distanceBetween(Vec2 a, Vec2 b) noexcept {
 }
 
 float experienceForLevel(std::int32_t level) noexcept {
-    const float l = static_cast<float>(level);
-    return 45.0f + l * l * 16.0f;
+    return 28.0f + static_cast<float>(level) * 30.0f;
 }
 
-// Hull profiles: standard, recon, heavy.
-float hullSpeed(std::int32_t hull) noexcept {
-    if (hull == 1) return 1.24f;
-    if (hull == 2) return 0.82f;
-    return 1.0f;
+Barrel gun(float angle, float length, float width, float offset, float damage,
+           float speed, float spread, float delay) noexcept {
+    Barrel barrel{};
+    barrel.angle = angle * to_radians;
+    barrel.length = length;
+    barrel.width = width;
+    barrel.offset = offset;
+    barrel.damage = damage;
+    barrel.speed = speed;
+    barrel.spread = spread;
+    barrel.delay = delay;
+    barrel.recoilOnly = 0.0f;
+    return barrel;
 }
 
-float hullHealth(std::int32_t hull) noexcept {
-    if (hull == 1) return 0.82f;
-    if (hull == 2) return 1.38f;
-    return 1.0f;
+Barrel thruster(float angle, float length, float width, float delay) noexcept {
+    Barrel barrel = gun(angle, length, width, 0.0f, 0.34f, 0.72f, 0.09f, delay);
+    barrel.recoilOnly = 1.0f;
+    return barrel;
 }
 
-float hullDamage(std::int32_t hull) noexcept {
-    if (hull == 1) return 0.86f;
-    if (hull == 2) return 1.22f;
-    return 1.0f;
+TankDefinition makeTank(std::string_view name, std::int32_t tier, float reload, float damage,
+                        float bulletSpeed, float bulletLife, float bulletRadius, float moveSpeed,
+                        float maxHealth, float bodyDamage, float vision, float stealth) noexcept {
+    TankDefinition definition{};
+    definition.name = name;
+    definition.tier = tier;
+    definition.unlockLevel = tierUnlockLevel(tier);
+    definition.reload = reload;
+    definition.damage = damage;
+    definition.bulletSpeed = bulletSpeed;
+    definition.bulletLife = bulletLife;
+    definition.bulletRadius = bulletRadius;
+    definition.moveSpeed = moveSpeed;
+    definition.maxHealth = maxHealth;
+    definition.bodyDamage = bodyDamage;
+    definition.vision = vision;
+    definition.stealth = stealth;
+    definition.barrelCount = 0;
+    definition.childCount = 0;
+    return definition;
 }
 
-std::int32_t hullBarrels(std::int32_t hull) noexcept {
-    return hull == 2 ? 2 : 1;
+void addBarrel(TankDefinition& definition, const Barrel& barrel) noexcept {
+    if (definition.barrelCount >= static_cast<std::int32_t>(max_barrels)) return;
+    definition.barrels[static_cast<std::size_t>(definition.barrelCount)] = barrel;
+    ++definition.barrelCount;
 }
 
+void addChildren(TankDefinition& definition, std::initializer_list<std::int32_t> ids) noexcept {
+    for (std::int32_t id : ids) {
+        if (definition.childCount >= static_cast<std::int32_t>(max_children)) return;
+        definition.children[static_cast<std::size_t>(definition.childCount)] = id;
+        ++definition.childCount;
+    }
+}
+
+std::array<TankDefinition, tank_count> buildTanks() noexcept {
+    std::array<TankDefinition, tank_count> tanks{};
+
+    TankDefinition& basic = tanks[0];
+    basic = makeTank("Basic", 1, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f);
+    addBarrel(basic, gun(0.0f, 96.0f, 30.0f, 0.0f, 1.0f, 1.0f, 0.02f, 0.0f));
+    addChildren(basic, {1, 2, 3, 4});
+
+    TankDefinition& twin = tanks[1];
+    twin = makeTank("Twin", 2, 1.52f, 0.6f, 1.0f, 1.0f, 0.92f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f);
+    addBarrel(twin, gun(0.0f, 92.0f, 24.0f, -14.0f, 1.0f, 1.0f, 0.03f, 0.0f));
+    addBarrel(twin, gun(0.0f, 92.0f, 24.0f, 14.0f, 1.0f, 1.0f, 0.03f, 0.5f));
+    addChildren(twin, {5, 6, 13});
+
+    TankDefinition& sniper = tanks[2];
+    sniper = makeTank("Sniper", 2, 0.62f, 1.62f, 1.55f, 1.55f, 1.0f, 0.94f, 1.0f, 1.0f, 0.28f, 0.0f);
+    addBarrel(sniper, gun(0.0f, 128.0f, 27.0f, 0.0f, 1.0f, 1.0f, 0.006f, 0.0f));
+    addChildren(sniper, {7, 8});
+
+    TankDefinition& machineGun = tanks[3];
+    machineGun = makeTank("Machine Gun", 2, 1.95f, 0.58f, 0.94f, 0.86f, 1.12f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f);
+    addBarrel(machineGun, gun(0.0f, 84.0f, 46.0f, 0.0f, 1.0f, 1.0f, 0.17f, 0.0f));
+    addChildren(machineGun, {9, 10});
+
+    TankDefinition& flankGuard = tanks[4];
+    flankGuard = makeTank("Flank Guard", 2, 1.0f, 0.94f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f);
+    addBarrel(flankGuard, gun(0.0f, 96.0f, 30.0f, 0.0f, 1.0f, 1.0f, 0.02f, 0.0f));
+    addBarrel(flankGuard, gun(180.0f, 80.0f, 26.0f, 0.0f, 0.72f, 0.9f, 0.03f, 0.5f));
+    addChildren(flankGuard, {11, 12});
+
+    TankDefinition& tripleShot = tanks[5];
+    tripleShot = makeTank("Triple Shot", 3, 1.16f, 0.62f, 1.0f, 1.0f, 0.94f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f);
+    addBarrel(tripleShot, gun(-26.0f, 84.0f, 26.0f, 0.0f, 1.0f, 1.0f, 0.03f, 0.0f));
+    addBarrel(tripleShot, gun(0.0f, 96.0f, 28.0f, 0.0f, 1.0f, 1.0f, 0.02f, 0.0f));
+    addBarrel(tripleShot, gun(26.0f, 84.0f, 26.0f, 0.0f, 1.0f, 1.0f, 0.03f, 0.0f));
+    addChildren(tripleShot, {14, 15});
+
+    TankDefinition& twinFlank = tanks[6];
+    twinFlank = makeTank("Twin Flank", 3, 1.5f, 0.56f, 1.0f, 1.0f, 0.92f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f);
+    addBarrel(twinFlank, gun(0.0f, 90.0f, 23.0f, -14.0f, 1.0f, 1.0f, 0.03f, 0.0f));
+    addBarrel(twinFlank, gun(0.0f, 90.0f, 23.0f, 14.0f, 1.0f, 1.0f, 0.03f, 0.5f));
+    addBarrel(twinFlank, gun(180.0f, 90.0f, 23.0f, -14.0f, 1.0f, 1.0f, 0.03f, 0.25f));
+    addBarrel(twinFlank, gun(180.0f, 90.0f, 23.0f, 14.0f, 1.0f, 1.0f, 0.03f, 0.75f));
+    addChildren(twinFlank, {13, 21});
+
+    TankDefinition& assassin = tanks[7];
+    assassin = makeTank("Assassin", 3, 0.5f, 2.12f, 1.85f, 1.8f, 1.0f, 0.92f, 0.94f, 1.0f, 0.4f, 0.0f);
+    addBarrel(assassin, gun(0.0f, 140.0f, 26.0f, 0.0f, 1.0f, 1.0f, 0.004f, 0.0f));
+    addChildren(assassin, {16, 17});
+
+    TankDefinition& hunter = tanks[8];
+    hunter = makeTank("Hunter", 3, 0.86f, 0.78f, 1.42f, 1.42f, 1.0f, 0.96f, 1.0f, 1.0f, 0.2f, 0.0f);
+    addBarrel(hunter, gun(0.0f, 118.0f, 30.0f, 0.0f, 1.0f, 1.0f, 0.01f, 0.0f));
+    addBarrel(hunter, gun(0.0f, 100.0f, 22.0f, 0.0f, 0.86f, 1.06f, 0.01f, 0.14f));
+    addChildren(hunter, {18});
+
+    TankDefinition& gunner = tanks[9];
+    gunner = makeTank("Gunner", 3, 2.45f, 0.34f, 1.08f, 0.94f, 0.7f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f);
+    addBarrel(gunner, gun(0.0f, 88.0f, 16.0f, -24.0f, 1.0f, 1.0f, 0.03f, 0.0f));
+    addBarrel(gunner, gun(0.0f, 88.0f, 16.0f, 24.0f, 1.0f, 1.0f, 0.03f, 0.5f));
+    addBarrel(gunner, gun(0.0f, 76.0f, 13.0f, -9.0f, 0.86f, 1.0f, 0.04f, 0.25f));
+    addBarrel(gunner, gun(0.0f, 76.0f, 13.0f, 9.0f, 0.86f, 1.0f, 0.04f, 0.75f));
+    addChildren(gunner, {18, 23});
+
+    TankDefinition& destroyer = tanks[10];
+    destroyer = makeTank("Destroyer", 3, 0.32f, 3.4f, 0.82f, 1.16f, 2.2f, 0.9f, 1.0f, 1.0f, 0.1f, 0.0f);
+    addBarrel(destroyer, gun(0.0f, 92.0f, 52.0f, 0.0f, 1.0f, 1.0f, 0.012f, 0.0f));
+    addChildren(destroyer, {19});
+
+    TankDefinition& triAngle = tanks[11];
+    triAngle = makeTank("Tri-Angle", 3, 1.0f, 0.9f, 1.0f, 1.0f, 1.0f, 1.26f, 0.94f, 1.0f, 0.0f, 0.0f);
+    addBarrel(triAngle, gun(0.0f, 96.0f, 30.0f, 0.0f, 1.0f, 1.0f, 0.02f, 0.0f));
+    addBarrel(triAngle, thruster(150.0f, 72.0f, 24.0f, 0.3f));
+    addBarrel(triAngle, thruster(210.0f, 72.0f, 24.0f, 0.6f));
+    addChildren(triAngle, {20});
+
+    TankDefinition& quadTank = tanks[12];
+    quadTank = makeTank("Quad Tank", 3, 1.1f, 0.76f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f);
+    addBarrel(quadTank, gun(0.0f, 92.0f, 28.0f, 0.0f, 1.0f, 1.0f, 0.02f, 0.0f));
+    addBarrel(quadTank, gun(90.0f, 92.0f, 28.0f, 0.0f, 1.0f, 1.0f, 0.02f, 0.25f));
+    addBarrel(quadTank, gun(180.0f, 92.0f, 28.0f, 0.0f, 1.0f, 1.0f, 0.02f, 0.5f));
+    addBarrel(quadTank, gun(270.0f, 92.0f, 28.0f, 0.0f, 1.0f, 1.0f, 0.02f, 0.75f));
+    addChildren(quadTank, {21});
+
+    TankDefinition& triplet = tanks[13];
+    triplet = makeTank("Triplet", 4, 1.82f, 0.52f, 1.02f, 1.0f, 0.94f, 1.0f, 1.06f, 1.0f, 0.0f, 0.0f);
+    addBarrel(triplet, gun(0.0f, 100.0f, 26.0f, 0.0f, 1.12f, 1.0f, 0.02f, 0.0f));
+    addBarrel(triplet, gun(0.0f, 86.0f, 22.0f, -22.0f, 1.0f, 1.0f, 0.03f, 0.33f));
+    addBarrel(triplet, gun(0.0f, 86.0f, 22.0f, 22.0f, 1.0f, 1.0f, 0.03f, 0.66f));
+    addChildren(triplet, {23});
+
+    TankDefinition& pentaShot = tanks[14];
+    pentaShot = makeTank("Penta Shot", 4, 1.24f, 0.5f, 1.0f, 1.0f, 0.92f, 0.98f, 1.0f, 1.0f, 0.0f, 0.0f);
+    addBarrel(pentaShot, gun(-44.0f, 74.0f, 22.0f, 0.0f, 1.0f, 0.95f, 0.03f, 0.5f));
+    addBarrel(pentaShot, gun(-22.0f, 86.0f, 24.0f, 0.0f, 1.0f, 1.0f, 0.03f, 0.25f));
+    addBarrel(pentaShot, gun(0.0f, 100.0f, 26.0f, 0.0f, 1.15f, 1.0f, 0.02f, 0.0f));
+    addBarrel(pentaShot, gun(22.0f, 86.0f, 24.0f, 0.0f, 1.0f, 1.0f, 0.03f, 0.25f));
+    addBarrel(pentaShot, gun(44.0f, 74.0f, 22.0f, 0.0f, 1.0f, 0.95f, 0.03f, 0.5f));
+    addChildren(pentaShot, {22});
+
+    TankDefinition& spreadShot = tanks[15];
+    spreadShot = makeTank("Spread Shot", 4, 1.06f, 0.4f, 0.96f, 0.9f, 0.88f, 0.98f, 1.0f, 1.0f, 0.0f, 0.0f);
+    addBarrel(spreadShot, gun(-66.0f, 58.0f, 18.0f, 0.0f, 1.0f, 0.86f, 0.03f, 0.6f));
+    addBarrel(spreadShot, gun(-48.0f, 66.0f, 18.0f, 0.0f, 1.0f, 0.9f, 0.03f, 0.45f));
+    addBarrel(spreadShot, gun(-30.0f, 74.0f, 18.0f, 0.0f, 1.0f, 0.94f, 0.03f, 0.3f));
+    addBarrel(spreadShot, gun(0.0f, 104.0f, 28.0f, 0.0f, 1.5f, 1.0f, 0.02f, 0.0f));
+    addBarrel(spreadShot, gun(30.0f, 74.0f, 18.0f, 0.0f, 1.0f, 0.94f, 0.03f, 0.3f));
+    addBarrel(spreadShot, gun(48.0f, 66.0f, 18.0f, 0.0f, 1.0f, 0.9f, 0.03f, 0.45f));
+    addBarrel(spreadShot, gun(66.0f, 58.0f, 18.0f, 0.0f, 1.0f, 0.86f, 0.03f, 0.6f));
+    addChildren(spreadShot, {22});
+
+    TankDefinition& ranger = tanks[16];
+    ranger = makeTank("Ranger", 4, 0.42f, 2.6f, 2.1f, 2.4f, 1.0f, 0.9f, 0.92f, 1.0f, 0.62f, 0.0f);
+    addBarrel(ranger, gun(0.0f, 152.0f, 26.0f, 0.0f, 1.0f, 1.0f, 0.002f, 0.0f));
+    addChildren(ranger, {24});
+
+    TankDefinition& stalker = tanks[17];
+    stalker = makeTank("Stalker", 4, 0.5f, 2.3f, 1.9f, 1.85f, 1.0f, 1.0f, 0.9f, 1.0f, 0.44f, 1.0f);
+    addBarrel(stalker, gun(0.0f, 142.0f, 26.0f, 0.0f, 1.0f, 1.0f, 0.004f, 0.0f));
+    addChildren(stalker, {24});
+
+    TankDefinition& streamliner = tanks[18];
+    streamliner = makeTank("Streamliner", 4, 2.6f, 0.34f, 1.32f, 1.2f, 0.76f, 0.96f, 1.0f, 1.0f, 0.16f, 0.0f);
+    addBarrel(streamliner, gun(0.0f, 122.0f, 22.0f, 0.0f, 1.0f, 1.0f, 0.012f, 0.0f));
+    addBarrel(streamliner, gun(0.0f, 112.0f, 20.0f, 0.0f, 0.94f, 1.0f, 0.014f, 0.2f));
+    addBarrel(streamliner, gun(0.0f, 102.0f, 18.0f, 0.0f, 0.88f, 1.0f, 0.016f, 0.4f));
+    addBarrel(streamliner, gun(0.0f, 92.0f, 16.0f, 0.0f, 0.82f, 1.0f, 0.018f, 0.6f));
+    addBarrel(streamliner, gun(0.0f, 82.0f, 14.0f, 0.0f, 0.76f, 1.0f, 0.02f, 0.8f));
+    addChildren(streamliner, {23});
+
+    TankDefinition& annihilator = tanks[19];
+    annihilator = makeTank("Annihilator", 4, 0.27f, 4.7f, 0.74f, 1.2f, 3.05f, 0.86f, 1.08f, 1.1f, 0.14f, 0.0f);
+    addBarrel(annihilator, gun(0.0f, 92.0f, 68.0f, 0.0f, 1.0f, 1.0f, 0.01f, 0.0f));
+    addChildren(annihilator, {25});
+
+    TankDefinition& booster = tanks[20];
+    booster = makeTank("Booster", 4, 1.0f, 0.86f, 1.0f, 1.0f, 1.0f, 1.46f, 0.9f, 1.0f, 0.0f, 0.0f);
+    addBarrel(booster, gun(0.0f, 96.0f, 30.0f, 0.0f, 1.0f, 1.0f, 0.02f, 0.0f));
+    addBarrel(booster, thruster(150.0f, 70.0f, 22.0f, 0.2f));
+    addBarrel(booster, thruster(210.0f, 70.0f, 22.0f, 0.45f));
+    addBarrel(booster, thruster(168.0f, 78.0f, 24.0f, 0.7f));
+    addBarrel(booster, thruster(192.0f, 78.0f, 24.0f, 0.9f));
+    addChildren(booster, {25});
+
+    TankDefinition& octoTank = tanks[21];
+    octoTank = makeTank("Octo Tank", 4, 1.02f, 0.6f, 1.0f, 1.0f, 0.96f, 0.98f, 1.08f, 1.0f, 0.0f, 0.0f);
+    for (std::int32_t i = 0; i < 8; ++i) {
+        const float angle = static_cast<float>(i) * 45.0f;
+        addBarrel(octoTank, gun(angle, 90.0f, 26.0f, 0.0f, 1.0f, 1.0f, 0.02f,
+                                static_cast<float>(i) * 0.125f));
+    }
+    addChildren(octoTank, {22});
+
+    TankDefinition& omniStorm = tanks[22];
+    omniStorm = makeTank("Omni Storm", 5, 1.42f, 0.52f, 1.06f, 1.05f, 0.94f, 1.0f, 1.22f, 1.15f, 0.12f, 0.0f);
+    for (std::int32_t i = 0; i < 12; ++i) {
+        const float angle = static_cast<float>(i) * 30.0f;
+        addBarrel(omniStorm, gun(angle, 88.0f, 24.0f, 0.0f, 1.0f, 1.0f, 0.025f,
+                                 static_cast<float>(i) / 12.0f));
+    }
+
+    TankDefinition& vulcan = tanks[23];
+    vulcan = makeTank("Vulcan", 5, 3.6f, 0.3f, 1.24f, 0.98f, 0.72f, 1.0f, 1.12f, 1.0f, 0.08f, 0.0f);
+    addBarrel(vulcan, gun(0.0f, 104.0f, 18.0f, -26.0f, 1.0f, 1.0f, 0.05f, 0.0f));
+    addBarrel(vulcan, gun(0.0f, 104.0f, 18.0f, 26.0f, 1.0f, 1.0f, 0.05f, 0.16f));
+    addBarrel(vulcan, gun(0.0f, 94.0f, 16.0f, -13.0f, 0.94f, 1.0f, 0.06f, 0.33f));
+    addBarrel(vulcan, gun(0.0f, 94.0f, 16.0f, 13.0f, 0.94f, 1.0f, 0.06f, 0.5f));
+    addBarrel(vulcan, gun(0.0f, 116.0f, 20.0f, 0.0f, 1.1f, 1.06f, 0.04f, 0.66f));
+    addBarrel(vulcan, thruster(180.0f, 64.0f, 22.0f, 0.83f));
+
+    TankDefinition& phantom = tanks[24];
+    phantom = makeTank("Phantom", 5, 0.6f, 2.95f, 2.05f, 2.1f, 1.05f, 1.16f, 0.95f, 1.0f, 0.56f, 1.0f);
+    addBarrel(phantom, gun(0.0f, 150.0f, 28.0f, 0.0f, 1.0f, 1.0f, 0.002f, 0.0f));
+    addBarrel(phantom, thruster(180.0f, 66.0f, 20.0f, 0.5f));
+
+    TankDefinition& siege = tanks[25];
+    siege = makeTank("Siege Breaker", 5, 0.34f, 4.2f, 0.8f, 1.3f, 2.85f, 0.9f, 1.55f, 1.25f, 0.16f, 0.0f);
+    addBarrel(siege, gun(0.0f, 96.0f, 66.0f, 0.0f, 1.0f, 1.0f, 0.01f, 0.0f));
+    addBarrel(siege, gun(-58.0f, 76.0f, 24.0f, 0.0f, 0.3f, 1.3f, 0.04f, 0.25f));
+    addBarrel(siege, gun(58.0f, 76.0f, 24.0f, 0.0f, 0.3f, 1.3f, 0.04f, 0.5f));
+    addBarrel(siege, thruster(165.0f, 74.0f, 26.0f, 0.7f));
+    addBarrel(siege, thruster(195.0f, 74.0f, 26.0f, 0.9f));
+
+    return tanks;
+}
+
+const std::array<TankDefinition, tank_count>& tankTable() noexcept {
+    static const std::array<TankDefinition, tank_count> tanks = buildTanks();
+    return tanks;
+}
+
+}
+
+std::int32_t tierUnlockLevel(std::int32_t tier) noexcept {
+    switch (tier) {
+        case 2: return 5;
+        case 3: return 15;
+        case 4: return 30;
+        case 5: return 45;
+        default: return 1;
+    }
+}
+
+const TankDefinition& tankDefinition(std::int32_t id) noexcept {
+    const auto& tanks = tankTable();
+    const std::size_t index = static_cast<std::size_t>(
+        std::clamp(id, 0, static_cast<std::int32_t>(tank_count) - 1));
+    return tanks[index];
 }
 
 TankSimulation::TankSimulation() noexcept {
-    reset();
+    startMatch(mode_survival, 0);
 }
 
 float TankSimulation::random() noexcept {
@@ -85,77 +331,100 @@ float TankSimulation::randomRange(float low, float high) noexcept {
     return low + (high - low) * random();
 }
 
+bool TankSimulation::cheat(std::int32_t index) const noexcept {
+    if (index < 0 || index >= static_cast<std::int32_t>(cheat_toggle_count)) return false;
+    return cheats_[static_cast<std::size_t>(index)];
+}
+
 void TankSimulation::reset() noexcept {
+    startMatch(mode_, player_.tankId);
+}
+
+void TankSimulation::startMatch(std::int32_t mode, std::int32_t tankId) noexcept {
+    mode_ = std::clamp(mode, 0, 1);
     player_ = {};
     input_ = {};
     bullets_ = {};
-    enemies_ = {};
+    bots_ = {};
     shapes_ = {};
     particles_ = {};
     upgrades_ = {};
-    abilityCooldowns_ = {};
+    teamScore_ = {};
 
     time_ = 0.0f;
-    spawnTimer_ = 1.5f;
+    matchTimer_ = mode_ == mode_team_battle ? match_length : 0.0f;
+    spawnTimer_ = 1.2f;
     waveTimer_ = 0.0f;
-    shieldTimer_ = 0.0f;
-    overdriveTimer_ = 0.0f;
-    scanTimer_ = 0.0f;
     cameraZoom_ = 1.0f;
-    threat_ = 0.0f;
     wave_ = 1;
+    winner_ = -1;
+    matchOver_ = false;
     rng_ = 0x9E3779B9u;
 
+    player_.tankId = std::clamp(tankId, 0, static_cast<std::int32_t>(tank_count) - 1);
+    const TankDefinition& definition = tankDefinition(player_.tankId);
+    player_.level = std::max(1, definition.unlockLevel);
     player_.maxHealth = maxHealthStat();
     player_.health = player_.maxHealth;
-    player_.energy = player_.maxEnergy;
     player_.alive = true;
+    player_.spawnGuard = 2.6f;
+    for (std::int32_t i = 0; i < definition.barrelCount; ++i) {
+        player_.barrelTimers[static_cast<std::size_t>(i)] =
+            definition.barrels[static_cast<std::size_t>(i)].delay / std::max(0.2f, reloadStat());
+    }
 
     spawnWorld();
+
+    if (mode_ == mode_team_battle) {
+        for (std::int32_t i = 0; i < 9; ++i) {
+            spawnBot(0, 1 + static_cast<std::int32_t>(random() * 12.0f),
+                     {-arenaHalfWidth_ * 0.6f + randomRange(-500.0f, 500.0f),
+                      randomRange(-arenaHalfHeight_ * 0.7f, arenaHalfHeight_ * 0.7f)});
+        }
+        for (std::int32_t i = 0; i < 10; ++i) {
+            spawnBot(1, 1 + static_cast<std::int32_t>(random() * 12.0f),
+                     {arenaHalfWidth_ * 0.6f + randomRange(-500.0f, 500.0f),
+                      randomRange(-arenaHalfHeight_ * 0.7f, arenaHalfHeight_ * 0.7f)});
+        }
+        player_.position = {-arenaHalfWidth_ * 0.6f, 0.0f};
+    }
 }
 
 void TankSimulation::spawnWorld() noexcept {
-    for (std::size_t i = 0; i < shapes_.size(); ++i) {
-        spawnShape(i, true);
-    }
+    for (std::size_t i = 0; i < shapes_.size(); ++i) spawnShape(i, true);
 }
 
 void TankSimulation::spawnShape(std::size_t index, bool anywhere) noexcept {
     Shape& shape = shapes_[index];
     const float roll = random();
 
-    if (roll > 0.94f) {
+    if (roll > 0.95f) {
         shape.sides = 5;
-        shape.size = randomRange(58.0f, 72.0f);
-        shape.maxHealth = 190.0f;
-    } else if (roll > 0.68f) {
+        shape.size = randomRange(58.0f, 74.0f);
+        shape.maxHealth = 210.0f;
+    } else if (roll > 0.7f) {
         shape.sides = 3;
         shape.size = randomRange(36.0f, 46.0f);
-        shape.maxHealth = 46.0f;
+        shape.maxHealth = 48.0f;
     } else {
         shape.sides = 4;
         shape.size = randomRange(26.0f, 36.0f);
         shape.maxHealth = 22.0f;
     }
 
-    if (mode_ == 4) shape.maxHealth *= 1.45f;
-
     shape.health = shape.maxHealth;
     shape.rotation = randomRange(0.0f, two_pi);
-    shape.spin = randomRange(-0.55f, 0.55f);
-    shape.velocity = {randomRange(-16.0f, 16.0f), randomRange(-16.0f, 16.0f)};
+    shape.spin = randomRange(-0.5f, 0.5f);
+    shape.velocity = {randomRange(-15.0f, 15.0f), randomRange(-15.0f, 15.0f)};
     shape.flash = 0.0f;
     shape.active = true;
 
     if (anywhere) {
         shape.position = {randomRange(-arenaHalfWidth_, arenaHalfWidth_),
                           randomRange(-arenaHalfHeight_, arenaHalfHeight_)};
-        if (distanceBetween(shape.position, player_.position) < 320.0f) {
-            shape.position.x += 420.0f;
-        }
     } else {
         const float angle = randomRange(0.0f, two_pi);
-        const float radius = randomRange(1300.0f, 2000.0f);
+        const float radius = randomRange(1400.0f, 2400.0f);
         shape.position = {player_.position.x + std::cos(angle) * radius,
                           player_.position.y + std::sin(angle) * radius};
     }
@@ -163,70 +432,66 @@ void TankSimulation::spawnShape(std::size_t index, bool anywhere) noexcept {
     clampToArena(shape.position, shape.size);
 }
 
-void TankSimulation::spawnEnemy() noexcept {
-    for (Enemy& enemy : enemies_) {
-        if (enemy.active) continue;
+std::int32_t TankSimulation::rosterTank(std::int32_t level) noexcept {
+    std::array<std::int32_t, tank_count> pool{};
+    std::int32_t count = 0;
 
-        const float roll = random();
-        if (roll > 0.82f) {
-            enemy.kind = 2;
-            enemy.maxHealth = 130.0f;
-            enemy.scale = 1.32f;
-        } else if (roll > 0.52f) {
-            enemy.kind = 1;
-            enemy.maxHealth = 62.0f;
-            enemy.scale = 0.92f;
-        } else {
-            enemy.kind = 0;
-            enemy.maxHealth = 84.0f;
-            enemy.scale = 1.0f;
-        }
-
-        enemy.maxHealth *= 1.0f + static_cast<float>(wave_ - 1) * 0.16f;
-        if (mode_ == 1) enemy.maxHealth *= 1.18f;
-        if (mode_ == 3) enemy.maxHealth *= 0.6f;
-
-        const float angle = randomRange(0.0f, two_pi);
-        const float radius = randomRange(1500.0f, 2100.0f);
-        enemy.position = {player_.position.x + std::cos(angle) * radius,
-                          player_.position.y + std::sin(angle) * radius};
-        clampToArena(enemy.position, enemy_radius * enemy.scale);
-
-        enemy.velocity = {};
-        enemy.health = enemy.maxHealth;
-        enemy.heading = angle + pi;
-        enemy.turret = enemy.heading;
-        enemy.reload = randomRange(0.4f, 1.4f);
-        enemy.wander = randomRange(0.0f, two_pi);
-        enemy.flash = 0.0f;
-        enemy.active = true;
-        burst(enemy.position, 2, 8, 150.0f);
-        return;
+    for (std::int32_t id = 0; id < static_cast<std::int32_t>(tank_count); ++id) {
+        const TankDefinition& definition = tankDefinition(id);
+        if (definition.unlockLevel > level) continue;
+        if (level >= 30 && definition.tier <= 2) continue;
+        if (level >= 15 && definition.tier == 1) continue;
+        pool[static_cast<std::size_t>(count)] = id;
+        ++count;
     }
+
+    if (count == 0) return 0;
+    const std::int32_t pick = static_cast<std::int32_t>(random() * static_cast<float>(count));
+    return pool[static_cast<std::size_t>(std::clamp(pick, 0, count - 1))];
 }
 
-void TankSimulation::fireBullet(Vec2 origin, float angle, float speed, float damage,
-                                float radius, float life, std::int32_t owner) noexcept {
-    for (Bullet& bullet : bullets_) {
-        if (bullet.active) continue;
+void TankSimulation::spawnBot(std::int32_t team, std::int32_t level, Vec2 origin) noexcept {
+    for (Bot& bot : bots_) {
+        if (bot.active) continue;
 
-        bullet.position = origin;
-        bullet.velocity = {std::cos(angle) * speed, std::sin(angle) * speed};
-        bullet.radius = radius;
-        bullet.life = life;
-        bullet.maxLife = life;
-        bullet.damage = damage;
-        bullet.owner = owner;
-        bullet.active = true;
+        bot.team = team;
+        bot.level = std::max(1, level);
+        bot.tankId = rosterTank(bot.level);
+
+        const TankDefinition& definition = tankDefinition(bot.tankId);
+        bot.maxHealth = base_health * definition.maxHealth *
+                        (1.0f + static_cast<float>(bot.level) * 0.042f);
+        bot.health = bot.maxHealth;
+        bot.position = origin;
+        clampToArena(bot.position, bot_radius);
+        bot.velocity = {};
+        bot.heading = randomRange(0.0f, two_pi);
+        bot.turret = bot.heading;
+        bot.scale = 0.94f + static_cast<float>(definition.tier) * 0.04f;
+        bot.flash = 0.0f;
+        bot.recoil = 0.0f;
+        bot.think = randomRange(0.0f, 0.4f);
+        bot.wander = randomRange(0.0f, two_pi);
+        bot.aggression = randomRange(0.35f, 0.95f);
+        bot.accuracy = std::min(0.9f, 0.34f + static_cast<float>(bot.level) * 0.014f +
+                                          randomRange(0.0f, 0.2f));
+        bot.retreat = 0.0f;
+        bot.respawn = 0.0f;
+        bot.target = -2;
+        bot.barrelTimers = {};
+        for (std::int32_t i = 0; i < definition.barrelCount; ++i) {
+            bot.barrelTimers[static_cast<std::size_t>(i)] =
+                definition.barrels[static_cast<std::size_t>(i)].delay;
+        }
+        bot.active = true;
+        burst(bot.position, 2, 10, 180.0f);
         return;
     }
 }
 
 void TankSimulation::burst(Vec2 origin, std::int32_t kind, std::int32_t count, float speed) noexcept {
     if (graphicsQuality_ <= 0) return;
-
-    const std::int32_t scaled =
-        std::max(1, count * std::min(graphicsQuality_ + 1, 4) / 4);
+    const std::int32_t scaled = std::max(1, count * std::min(graphicsQuality_ + 1, 4) / 4);
 
     std::int32_t spawned = 0;
     for (Particle& particle : particles_) {
@@ -234,10 +499,10 @@ void TankSimulation::burst(Vec2 origin, std::int32_t kind, std::int32_t count, f
         if (particle.active) continue;
 
         const float angle = randomRange(0.0f, two_pi);
-        const float magnitude = randomRange(speed * 0.35f, speed);
+        const float magnitude = randomRange(speed * 0.3f, speed);
         particle.position = origin;
         particle.velocity = {std::cos(angle) * magnitude, std::sin(angle) * magnitude};
-        particle.maxLife = randomRange(0.32f, 0.85f);
+        particle.maxLife = randomRange(0.3f, 0.8f);
         particle.life = particle.maxLife;
         particle.size = randomRange(3.0f, 9.0f);
         particle.kind = kind;
@@ -252,50 +517,43 @@ void TankSimulation::clampToArena(Vec2& position, float radius) const noexcept {
 }
 
 float TankSimulation::damageStat() const noexcept {
-    return 15.0f * (1.0f + static_cast<float>(upgrades_[0]) * 0.17f) * hullDamage(hull_);
+    const TankDefinition& definition = tankDefinition(player_.tankId);
+    return base_damage * definition.damage *
+           (1.0f + static_cast<float>(upgrades_[0]) * 0.16f);
 }
 
 float TankSimulation::reloadStat() const noexcept {
-    const float boost = overdriveTimer_ > 0.0f ? 1.85f : 1.0f;
-    return 2.7f * (1.0f + static_cast<float>(upgrades_[1]) * 0.15f) * boost;
+    const TankDefinition& definition = tankDefinition(player_.tankId);
+    float rate = base_rate * definition.reload * (1.0f + static_cast<float>(upgrades_[1]) * 0.14f);
+    if (cheat(cheat_rapid_fire)) rate *= 3.2f;
+    if (cheat(cheat_no_cooldown)) rate *= 7.0f;
+    return rate;
 }
 
 float TankSimulation::bulletSpeedStat() const noexcept {
-    const float hullBonus = hull_ == 1 ? 1.16f : 1.0f;
-    return 820.0f * (1.0f + static_cast<float>(upgrades_[2]) * 0.09f) * hullBonus;
+    const TankDefinition& definition = tankDefinition(player_.tankId);
+    return base_bullet_speed * definition.bulletSpeed *
+           (1.0f + static_cast<float>(upgrades_[2]) * 0.085f);
 }
 
 float TankSimulation::moveSpeedStat() const noexcept {
-    const float boost = overdriveTimer_ > 0.0f ? 1.55f : 1.0f;
-    return 315.0f * (1.0f + static_cast<float>(upgrades_[3]) * 0.085f) * hullSpeed(hull_) * boost;
+    const TankDefinition& definition = tankDefinition(player_.tankId);
+    float speed = base_move_speed * definition.moveSpeed *
+                  (1.0f + static_cast<float>(upgrades_[3]) * 0.08f);
+    if (cheat(cheat_speed)) speed *= 2.3f;
+    return speed;
 }
 
 float TankSimulation::maxHealthStat() const noexcept {
-    return 100.0f * (1.0f + static_cast<float>(upgrades_[4]) * 0.19f) * hullHealth(hull_);
+    const TankDefinition& definition = tankDefinition(player_.tankId);
+    return base_health * definition.maxHealth *
+           (1.0f + static_cast<float>(upgrades_[4]) * 0.18f) *
+           (1.0f + static_cast<float>(player_.level) * 0.02f);
 }
 
 float TankSimulation::regenStat() const noexcept {
-    return 1.6f + static_cast<float>(upgrades_[5]) * 1.9f;
-}
-
-void TankSimulation::setMode(std::int32_t mode) noexcept {
-    mode_ = std::clamp(mode, 0, 4);
-}
-
-void TankSimulation::setHull(std::int32_t hull) noexcept {
-    hull_ = std::clamp(hull, 0, 2);
-    const float ratio = player_.maxHealth > 0.0f ? player_.health / player_.maxHealth : 1.0f;
-    player_.maxHealth = maxHealthStat();
-    player_.health = player_.maxHealth * std::clamp(ratio, 0.0f, 1.0f);
-}
-
-void TankSimulation::setGraphicsQuality(std::int32_t level) noexcept {
-    graphicsQuality_ = std::clamp(level, 0, 4);
-}
-
-void TankSimulation::setDeveloperFlag(std::int32_t flag, bool enabled) noexcept {
-    if (flag < 0 || flag >= static_cast<std::int32_t>(developerFlags_.size())) return;
-    developerFlags_[static_cast<std::size_t>(flag)] = enabled;
+    return 2.2f + static_cast<float>(upgrades_[5]) * 1.9f +
+           static_cast<float>(player_.level) * 0.08f;
 }
 
 void TankSimulation::setInput(float moveX, float moveY, float aimX, float aimY, bool firing) noexcept {
@@ -306,75 +564,128 @@ void TankSimulation::setInput(float moveX, float moveY, float aimX, float aimY, 
     input_.firing = firing;
 }
 
-bool TankSimulation::triggerAbility(std::int32_t index) noexcept {
-    if (index < 0 || index >= static_cast<std::int32_t>(ability_count)) return false;
+void TankSimulation::setGraphicsQuality(std::int32_t level) noexcept {
+    graphicsQuality_ = std::clamp(level, 0, 4);
+}
 
-    const std::size_t slot = static_cast<std::size_t>(index);
-    if (abilityCooldowns_[slot] > 0.0f) return false;
+void TankSimulation::setCheat(std::int32_t index, bool enabled) noexcept {
+    if (index < 0 || index >= static_cast<std::int32_t>(cheat_toggle_count)) return;
+    cheats_[static_cast<std::size_t>(index)] = enabled;
+}
 
-    const float cost = developerFlags_[1] ? 0.0f : ability_cost[slot];
-    if (player_.energy < cost) return false;
-
-    player_.energy -= cost;
-    abilityCooldowns_[slot] = ability_cooldown[slot];
-
+void TankSimulation::cheatAction(std::int32_t index) noexcept {
     switch (index) {
         case 0:
-            shieldTimer_ = 4.5f;
-            burst(player_.position, 1, 26, 260.0f);
+            awardExperience(experienceForLevel(player_.level) + 1.0f, 0.0f);
             break;
         case 1:
-            overdriveTimer_ = 6.0f;
-            burst(player_.position, 3, 22, 300.0f);
+            for (std::int32_t i = 0; i < 10; ++i) {
+                awardExperience(experienceForLevel(player_.level) + 1.0f, 0.0f);
+            }
             break;
         case 2:
-            player_.health = std::min(player_.maxHealth, player_.health + player_.maxHealth * 0.45f);
-            burst(player_.position, 4, 30, 220.0f);
+            for (std::int32_t i = 0; i < static_cast<std::int32_t>(upgrade_count); ++i) {
+                upgrades_[static_cast<std::size_t>(i)] = static_cast<std::int32_t>(upgrade_cap);
+            }
+            player_.maxHealth = maxHealthStat();
+            player_.health = player_.maxHealth;
             break;
+        case 3:
+            for (Bot& bot : bots_) {
+                if (!bot.active || bot.team == 0) continue;
+                burst(bot.position, 0, 22, 380.0f);
+                bot.active = false;
+                bot.respawn = mode_ == mode_team_battle ? 5.0f : 0.0f;
+                ++player_.kills;
+                addTeamScore(0, 100.0f);
+            }
+            break;
+        case 4:
+            player_.maxHealth = maxHealthStat();
+            player_.health = player_.maxHealth;
+            player_.alive = true;
+            player_.respawnTimer = 0.0f;
+            break;
+        case 5:
+            player_.position = {};
+            player_.velocity = {};
+            break;
+        case 6:
+            player_.statPoints += 10;
+            break;
+        case 7: {
+            std::int32_t best = player_.tankId;
+            for (std::int32_t id = 0; id < static_cast<std::int32_t>(tank_count); ++id) {
+                if (tankDefinition(id).tier == 5) {
+                    best = id;
+                    break;
+                }
+            }
+            evolve(best);
+            break;
+        }
         default:
-            scanTimer_ = 6.5f;
-            burst(player_.position, 5, 34, 380.0f);
             break;
     }
-
-    return true;
 }
 
 bool TankSimulation::upgrade(std::int32_t stat) noexcept {
     if (stat < 0 || stat >= static_cast<std::int32_t>(upgrade_count)) return false;
-
     const std::size_t slot = static_cast<std::size_t>(stat);
-    if (player_.statPoints <= 0 || upgrades_[slot] >= max_upgrade_level) return false;
+    if (player_.statPoints <= 0) return false;
+    if (upgrades_[slot] >= static_cast<std::int32_t>(upgrade_cap)) return false;
 
     ++upgrades_[slot];
     --player_.statPoints;
 
     const float ratio = player_.maxHealth > 0.0f ? player_.health / player_.maxHealth : 1.0f;
     player_.maxHealth = maxHealthStat();
-    player_.health = std::min(player_.maxHealth, player_.maxHealth * ratio + 12.0f);
+    player_.health = std::min(player_.maxHealth, player_.maxHealth * ratio + 14.0f);
+    return true;
+}
+
+bool TankSimulation::evolve(std::int32_t tankId) noexcept {
+    if (tankId < 0 || tankId >= static_cast<std::int32_t>(tank_count)) return false;
+
+    const TankDefinition& target = tankDefinition(tankId);
+    if (target.unlockLevel > player_.level) return false;
+
+    const TankDefinition& current = tankDefinition(player_.tankId);
+    bool allowed = cheats_[static_cast<std::size_t>(cheat_god)] && target.tier == 5;
+    for (std::int32_t i = 0; i < current.childCount && !allowed; ++i) {
+        if (current.children[static_cast<std::size_t>(i)] == tankId) allowed = true;
+    }
+    if (!allowed) return false;
+
+    player_.tankId = tankId;
+    player_.barrelTimers = {};
+    for (std::int32_t i = 0; i < target.barrelCount; ++i) {
+        player_.barrelTimers[static_cast<std::size_t>(i)] =
+            target.barrels[static_cast<std::size_t>(i)].delay / std::max(0.2f, reloadStat());
+    }
+
+    const float ratio = player_.maxHealth > 0.0f ? player_.health / player_.maxHealth : 1.0f;
+    player_.maxHealth = maxHealthStat();
+    player_.health = std::min(player_.maxHealth, player_.maxHealth * std::max(ratio, 0.55f));
+    burst(player_.position, 4, 46, 460.0f);
     return true;
 }
 
 void TankSimulation::respawn() noexcept {
-    player_.position = {};
+    player_.position = mode_ == mode_team_battle
+        ? Vec2{-arenaHalfWidth_ * 0.68f, randomRange(-600.0f, 600.0f)}
+        : Vec2{};
     player_.velocity = {};
     player_.maxHealth = maxHealthStat();
     player_.health = player_.maxHealth;
-    player_.energy = player_.maxEnergy;
     player_.respawnTimer = 0.0f;
     player_.damageFlash = 0.0f;
+    player_.spawnGuard = 2.6f;
     player_.alive = true;
-    shieldTimer_ = 2.5f;
 
-    for (Enemy& enemy : enemies_) {
-        if (enemy.active && distanceBetween(enemy.position, player_.position) < 900.0f) {
-            enemy.active = false;
-        }
-    }
     for (Bullet& bullet : bullets_) {
-        if (bullet.owner == 1) bullet.active = false;
+        if (bullet.team != 0) bullet.active = false;
     }
-
     burst(player_.position, 1, 40, 420.0f);
 }
 
@@ -387,20 +698,14 @@ std::int32_t TankSimulation::statPoints() const noexcept {
     return player_.statPoints;
 }
 
-std::int32_t TankSimulation::level() const noexcept {
-    return player_.level;
-}
-
-float TankSimulation::abilityCooldownRatio(std::int32_t index) const noexcept {
-    if (index < 0 || index >= static_cast<std::int32_t>(ability_count)) return 1.0f;
-
-    const std::size_t slot = static_cast<std::size_t>(index);
-    if (abilityCooldowns_[slot] <= 0.0f) return 1.0f;
-    return 1.0f - std::clamp(abilityCooldowns_[slot] / ability_cooldown[slot], 0.0f, 1.0f);
+void TankSimulation::addTeamScore(std::int32_t team, float points) noexcept {
+    if (team < 0 || team > 1) return;
+    teamScore_[static_cast<std::size_t>(team)] += points;
 }
 
 void TankSimulation::awardExperience(float amount, float points) noexcept {
-    player_.xp += amount;
+    const float multiplier = cheat(cheat_xp_boost) ? 10.0f : 1.0f;
+    player_.xp += amount * multiplier;
     player_.score += points;
 
     while (player_.xp >= experienceForLevel(player_.level)) {
@@ -408,15 +713,14 @@ void TankSimulation::awardExperience(float amount, float points) noexcept {
         ++player_.level;
         ++player_.statPoints;
         player_.maxHealth = maxHealthStat();
-        player_.health = std::min(player_.maxHealth, player_.health + player_.maxHealth * 0.22f);
-        player_.energy = player_.maxEnergy;
-        burst(player_.position, 4, 34, 340.0f);
+        player_.health = std::min(player_.maxHealth, player_.health + player_.maxHealth * 0.2f);
+        burst(player_.position, 4, 30, 320.0f);
     }
 }
 
 void TankSimulation::damagePlayer(float amount) noexcept {
-    if (!player_.alive) return;
-    if (developerFlags_[0] || shieldTimer_ > 0.0f) return;
+    if (!player_.alive || matchOver_) return;
+    if (cheat(cheat_god) || player_.spawnGuard > 0.0f) return;
 
     player_.health -= amount;
     player_.damageFlash = std::min(1.0f, player_.damageFlash + amount / 45.0f);
@@ -424,32 +728,90 @@ void TankSimulation::damagePlayer(float amount) noexcept {
     if (player_.health <= 0.0f) {
         player_.health = 0.0f;
         player_.alive = false;
-        player_.respawnTimer = 3.0f;
+        player_.respawnTimer = mode_ == mode_team_battle ? 5.0f : 3.0f;
         burst(player_.position, 0, 60, 520.0f);
+        addTeamScore(1, mode_ == mode_team_battle ? 100.0f : 0.0f);
+    }
+}
+
+void TankSimulation::fireWeapon(Vec2 origin, float baseAngle, const TankDefinition& definition,
+                                float damageScale, float speedScale, float radiusScale,
+                                float lifeScale, std::int32_t team, std::int32_t sourceBot,
+                                bool fromPlayer, std::array<float, max_barrels>& timers,
+                                float& recoilOut, Vec2& velocityOut, float dt) noexcept {
+    const float rate = fromPlayer ? reloadStat() : base_rate * definition.reload;
+    const float cycle = 1.0f / std::max(0.15f, rate);
+
+    for (std::int32_t i = 0; i < definition.barrelCount; ++i) {
+        const std::size_t slot = static_cast<std::size_t>(i);
+        const Barrel& barrel = definition.barrels[slot];
+        timers[slot] -= dt;
+        if (timers[slot] > 0.0f) continue;
+        timers[slot] = cycle;
+
+        const float spread = barrel.spread * randomRange(-1.0f, 1.0f);
+        const float angle = baseAngle + barrel.angle + spread;
+        const float lateral = angle + pi * 0.5f;
+        const Vec2 muzzle{
+            origin.x + std::cos(angle) * barrel.length + std::cos(lateral) * barrel.offset,
+            origin.y + std::sin(angle) * barrel.length + std::sin(lateral) * barrel.offset
+        };
+
+        float damage = damageScale * barrel.damage;
+        if (fromPlayer && cheat(cheat_one_shot)) damage = 999999.0f;
+
+        float radius = base_bullet_radius * definition.bulletRadius * radiusScale *
+                       (0.62f + barrel.width / 60.0f);
+        if (fromPlayer && cheat(cheat_giant_bullets)) radius *= 3.0f;
+
+        float life = base_bullet_life * definition.bulletLife * lifeScale;
+        if (fromPlayer && cheat(cheat_infinite_range)) life *= 4.0f;
+
+        const float speed = base_bullet_speed * definition.bulletSpeed * speedScale * barrel.speed;
+
+        for (Bullet& bullet : bullets_) {
+            if (bullet.active) continue;
+            bullet.position = muzzle;
+            bullet.velocity = {std::cos(angle) * speed, std::sin(angle) * speed};
+            bullet.radius = radius;
+            bullet.life = life;
+            bullet.maxLife = life;
+            bullet.damage = damage;
+            bullet.team = team;
+            bullet.sourceBot = sourceBot;
+            bullet.fromPlayer = fromPlayer;
+            bullet.homing = fromPlayer && cheat(cheat_magic_bullet);
+            bullet.penetrating = fromPlayer && cheat(cheat_penetration);
+            bullet.active = true;
+            break;
+        }
+
+        const bool noRecoil = fromPlayer && cheat(cheat_no_recoil);
+        if (!noRecoil) {
+            const float force = barrel.recoilOnly > 0.5f ? 118.0f : 26.0f;
+            velocityOut.x -= std::cos(angle) * force * barrel.width / 30.0f;
+            velocityOut.y -= std::sin(angle) * force * barrel.width / 30.0f;
+        }
+        recoilOut = 1.0f;
+        burst(muzzle, fromPlayer ? 3 : 7, 3, 120.0f);
     }
 }
 
 void TankSimulation::updatePlayer(float dt) noexcept {
+    const TankDefinition& definition = tankDefinition(player_.tankId);
+
     player_.recoil = std::max(0.0f, player_.recoil - dt * 6.0f);
     player_.muzzleFlash = std::max(0.0f, player_.muzzleFlash - dt * 7.0f);
     player_.damageFlash = std::max(0.0f, player_.damageFlash - dt * 1.9f);
-
-    for (float& cooldown : abilityCooldowns_) {
-        cooldown = std::max(0.0f, cooldown - dt);
-    }
-
-    shieldTimer_ = std::max(0.0f, shieldTimer_ - dt);
-    overdriveTimer_ = std::max(0.0f, overdriveTimer_ - dt);
-    scanTimer_ = std::max(0.0f, scanTimer_ - dt);
+    player_.spawnGuard = std::max(0.0f, player_.spawnGuard - dt);
 
     if (!player_.alive) {
         player_.respawnTimer = std::max(0.0f, player_.respawnTimer - dt);
         player_.velocity = {player_.velocity.x * 0.9f, player_.velocity.y * 0.9f};
+        if (mode_ == mode_team_battle && player_.respawnTimer <= 0.0f && !matchOver_) respawn();
         return;
     }
 
-    player_.energy = std::min(player_.maxEnergy,
-                              player_.energy + (developerFlags_[1] ? 100.0f : 11.0f) * dt);
     player_.health = std::min(player_.maxHealth, player_.health + regenStat() * dt);
 
     const Vec2 wish{input_.moveX, input_.moveY};
@@ -462,9 +824,11 @@ void TankSimulation::updatePlayer(float dt) noexcept {
         player_.velocity.x += (direction.x * speed * magnitude - player_.velocity.x) * std::min(1.0f, dt * 7.0f);
         player_.velocity.y += (direction.y * speed * magnitude - player_.velocity.y) * std::min(1.0f, dt * 7.0f);
         player_.heading = approachAngle(player_.heading, std::atan2(direction.y, direction.x), dt * 9.0f);
+        player_.idle = 0.0f;
     } else {
-        player_.velocity.x -= player_.velocity.x * std::min(1.0f, dt * 6.0f);
-        player_.velocity.y -= player_.velocity.y * std::min(1.0f, dt * 6.0f);
+        player_.velocity.x -= player_.velocity.x * std::min(1.0f, dt * 5.0f);
+        player_.velocity.y -= player_.velocity.y * std::min(1.0f, dt * 5.0f);
+        player_.idle += dt;
     }
 
     player_.position.x += player_.velocity.x * dt;
@@ -472,116 +836,280 @@ void TankSimulation::updatePlayer(float dt) noexcept {
     clampToArena(player_.position, player_radius);
 
     const float aimMagnitude = std::sqrt(input_.aimX * input_.aimX + input_.aimY * input_.aimY);
-    if (aimMagnitude > 0.14f) {
-        player_.turret = approachAngle(player_.turret, std::atan2(input_.aimY, input_.aimX), dt * 16.0f);
+    bool firing = input_.firing || aimMagnitude > 0.55f || cheat(cheat_auto_fire);
+
+    if (cheat(cheat_aimbot)) {
+        const std::int32_t target = nearestEnemyToPlayer(4200.0f);
+        if (target >= 0) {
+            const Bot& bot = bots_[static_cast<std::size_t>(target)];
+            const float bulletSpeed = bulletSpeedStat() * definition.bulletSpeed;
+            const float travel = distanceBetween(player_.position, bot.position) /
+                                 std::max(120.0f, bulletSpeed);
+            const Vec2 lead{bot.position.x + bot.velocity.x * travel,
+                            bot.position.y + bot.velocity.y * travel};
+            player_.turret = std::atan2(lead.y - player_.position.y, lead.x - player_.position.x);
+            firing = true;
+        }
+    } else if (aimMagnitude > 0.14f) {
+        player_.turret = approachAngle(player_.turret, std::atan2(input_.aimY, input_.aimX), dt * 18.0f);
     } else if (magnitude > 0.06f) {
         player_.turret = approachAngle(player_.turret, player_.heading, dt * 4.0f);
     }
 
-    player_.reload = std::max(0.0f, player_.reload - dt);
-
-    const bool wantsFire = input_.firing || aimMagnitude > 0.55f;
-    if (wantsFire && player_.reload <= 0.0f) {
-        player_.reload = 1.0f / std::max(0.35f, reloadStat());
-        player_.recoil = 1.0f;
-        player_.muzzleFlash = 1.0f;
-
-        const std::int32_t barrels = hullBarrels(hull_);
-        const float damage = damageStat();
-        const float bulletSpeed = bulletSpeedStat();
-
-        for (std::int32_t i = 0; i < barrels; ++i) {
-            const float offset = barrels == 1 ? 0.0f : (static_cast<float>(i) - 0.5f) * 0.09f;
-            const float angle = player_.turret + offset;
-            const Vec2 muzzle{player_.position.x + std::cos(angle) * 96.0f,
-                              player_.position.y + std::sin(angle) * 96.0f};
-            fireBullet(muzzle, angle, bulletSpeed, damage / static_cast<float>(barrels),
-                       hull_ == 2 ? 9.0f : 8.0f, 1.5f, 0);
-        }
-
-        burst({player_.position.x + std::cos(player_.turret) * 96.0f,
-               player_.position.y + std::sin(player_.turret) * 96.0f},
-              3, 4, 130.0f);
+    if (definition.stealth > 0.5f) {
+        const float target = (player_.idle > 0.9f && !firing) ? 0.12f : 1.0f;
+        player_.stealth += (target - player_.stealth) * std::min(1.0f, dt * 2.4f);
+    } else {
+        player_.stealth += (1.0f - player_.stealth) * std::min(1.0f, dt * 4.0f);
     }
 
-    const float targetZoom = 1.0f + static_cast<float>(player_.level - 1) * 0.012f;
-    cameraZoom_ += (std::min(1.42f, targetZoom) - cameraZoom_) * std::min(1.0f, dt * 1.6f);
+    if (firing && !matchOver_) {
+        player_.muzzleFlash = 1.0f;
+        fireWeapon(player_.position, player_.turret, definition,
+                   damageStat(), bulletSpeedStat() / base_bullet_speed, 1.0f, 1.0f,
+                   0, -1, true, player_.barrelTimers, player_.recoil, player_.velocity, dt);
+    } else {
+        const float cycle = 1.0f / std::max(0.15f, reloadStat());
+        for (std::int32_t i = 0; i < definition.barrelCount; ++i) {
+            const std::size_t slot = static_cast<std::size_t>(i);
+            player_.barrelTimers[slot] = std::max(-cycle, player_.barrelTimers[slot] - dt);
+        }
+    }
+
+    const float targetZoom = std::min(1.75f, 1.0f + static_cast<float>(player_.level - 1) * 0.009f +
+                                                 definition.vision);
+    cameraZoom_ += (targetZoom - cameraZoom_) * std::min(1.0f, dt * 1.8f);
 }
 
-void TankSimulation::updateEnemies(float dt) noexcept {
-    const float slow = scanTimer_ > 0.0f ? 0.55f : 1.0f;
-    threat_ = 0.0f;
+std::int32_t TankSimulation::nearestEnemyToPlayer(float maxDistance) const noexcept {
+    std::int32_t best = -1;
+    float bestDistance = maxDistance;
 
-    for (Enemy& enemy : enemies_) {
-        if (!enemy.active) continue;
-
-        enemy.flash = std::max(0.0f, enemy.flash - dt * 4.0f);
-        enemy.wander += dt * 0.9f;
-
-        const float distance = distanceBetween(enemy.position, player_.position);
-        const float toPlayer = std::atan2(player_.position.y - enemy.position.y,
-                                          player_.position.x - enemy.position.x);
-
-        float desired = toPlayer;
-        float speed = 165.0f;
-
-        if (enemy.kind == 1) {
-            speed = 195.0f;
-            if (distance < 720.0f) desired = toPlayer + pi;
-            else if (distance < 980.0f) desired = toPlayer + pi * 0.5f;
-        } else if (enemy.kind == 2) {
-            speed = 118.0f;
-        } else {
-            speed = 205.0f;
+    for (std::size_t i = 0; i < bots_.size(); ++i) {
+        const Bot& bot = bots_[i];
+        if (!bot.active || bot.team == 0) continue;
+        const float distance = distanceBetween(player_.position, bot.position);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = static_cast<std::int32_t>(i);
         }
+    }
+    return best;
+}
 
-        speed *= slow;
-        speed *= 1.0f + static_cast<float>(wave_ - 1) * 0.03f;
-        if (mode_ == 3) speed *= 0.7f;
-        if (!player_.alive) {
-            desired = enemy.wander;
-            speed *= 0.4f;
+Vec2 TankSimulation::targetPosition(std::int32_t target) const noexcept {
+    if (target == -1) return player_.position;
+    if (target < 0 || target >= static_cast<std::int32_t>(max_bots)) return {};
+    return bots_[static_cast<std::size_t>(target)].position;
+}
+
+Vec2 TankSimulation::targetVelocity(std::int32_t target) const noexcept {
+    if (target == -1) return player_.velocity;
+    if (target < 0 || target >= static_cast<std::int32_t>(max_bots)) return {};
+    return bots_[static_cast<std::size_t>(target)].velocity;
+}
+
+bool TankSimulation::targetAlive(std::int32_t target) const noexcept {
+    if (target == -1) return player_.alive;
+    if (target < 0 || target >= static_cast<std::int32_t>(max_bots)) return false;
+    return bots_[static_cast<std::size_t>(target)].active;
+}
+
+std::int32_t TankSimulation::pickTarget(const Bot& bot, std::size_t self) const noexcept {
+    std::int32_t best = -2;
+    float bestScore = 1e9f;
+
+    if (bot.team != 0 && player_.alive) {
+        const float visibility = std::max(0.2f, player_.stealth);
+        const float distance = distanceBetween(bot.position, player_.position) / visibility;
+        const float bias = mode_ == mode_survival ? 0.25f : 0.8f;
+        bestScore = distance * bias;
+        best = -1;
+    }
+
+    if (mode_ == mode_team_battle) {
+        for (std::size_t i = 0; i < bots_.size(); ++i) {
+            if (i == self) continue;
+            const Bot& other = bots_[i];
+            if (!other.active || other.team == bot.team) continue;
+            const float distance = distanceBetween(bot.position, other.position);
+            const float score = distance * (other.health < other.maxHealth * 0.4f ? 0.72f : 1.0f);
+            if (score < bestScore) {
+                bestScore = score;
+                best = static_cast<std::int32_t>(i);
+            }
         }
+    }
 
-        enemy.heading = approachAngle(enemy.heading, desired, dt * 3.4f);
-        enemy.turret = approachAngle(enemy.turret, toPlayer, dt * 5.5f);
+    if (best != -2 && bestScore > 3400.0f && mode_ == mode_team_battle) return -2;
+    return best;
+}
 
-        const float wobble = std::sin(enemy.wander) * 0.35f;
-        enemy.velocity.x += (std::cos(enemy.heading + wobble) * speed - enemy.velocity.x) * std::min(1.0f, dt * 4.0f);
-        enemy.velocity.y += (std::sin(enemy.heading + wobble) * speed - enemy.velocity.y) * std::min(1.0f, dt * 4.0f);
-        enemy.position.x += enemy.velocity.x * dt;
-        enemy.position.y += enemy.velocity.y * dt;
-        clampToArena(enemy.position, enemy_radius * enemy.scale);
+void TankSimulation::updateBots(float dt) noexcept {
+    const bool frozen = cheat(cheat_freeze);
+    const float slow = cheat(cheat_slow_enemies) ? 0.35f : 1.0f;
 
-        if (distance < 1600.0f) {
-            threat_ = std::min(1.0f, threat_ + 0.14f);
-        }
+    for (std::size_t index = 0; index < bots_.size(); ++index) {
+        Bot& bot = bots_[index];
 
-        enemy.reload = std::max(0.0f, enemy.reload - dt * slow);
-        if (player_.alive && enemy.reload <= 0.0f && distance < 1500.0f) {
-            const float damageScale = mode_ == 3 ? 0.45f : 1.0f;
-
-            if (enemy.kind == 1) {
-                enemy.reload = 1.55f;
-                fireBullet(enemy.position, enemy.turret, 760.0f, 13.0f * damageScale, 7.0f, 2.2f, 1);
-            } else if (enemy.kind == 2) {
-                enemy.reload = 2.1f;
-                for (std::int32_t i = -1; i <= 1; ++i) {
-                    fireBullet(enemy.position, enemy.turret + static_cast<float>(i) * 0.19f,
-                               520.0f, 11.0f * damageScale, 10.0f, 2.0f, 1);
+        if (!bot.active) {
+            if (bot.respawn > 0.0f) {
+                bot.respawn -= dt;
+                if (bot.respawn <= 0.0f && mode_ == mode_team_battle && !matchOver_) {
+                    const float side = bot.team == 0 ? -1.0f : 1.0f;
+                    spawnBot(bot.team, 1 + static_cast<std::int32_t>(time_ / 22.0f),
+                             {side * arenaHalfWidth_ * 0.72f,
+                              randomRange(-arenaHalfHeight_ * 0.8f, arenaHalfHeight_ * 0.8f)});
                 }
+            }
+            continue;
+        }
+
+        const TankDefinition& definition = tankDefinition(bot.tankId);
+        bot.flash = std::max(0.0f, bot.flash - dt * 4.0f);
+        bot.recoil = std::max(0.0f, bot.recoil - dt * 6.0f);
+        bot.health = std::min(bot.maxHealth, bot.health + dt * (0.5f + static_cast<float>(bot.level) * 0.02f));
+
+        if (frozen || matchOver_) {
+            bot.velocity = {bot.velocity.x * 0.86f, bot.velocity.y * 0.86f};
+            bot.position.x += bot.velocity.x * dt;
+            bot.position.y += bot.velocity.y * dt;
+            continue;
+        }
+
+        bot.think -= dt;
+        if (bot.think <= 0.0f) {
+            bot.think = randomRange(0.25f, 0.7f);
+            bot.target = pickTarget(bot, index);
+        }
+        if (!targetAlive(bot.target)) bot.target = pickTarget(bot, index);
+
+        const float healthRatio = bot.maxHealth > 0.0f ? bot.health / bot.maxHealth : 0.0f;
+        if (healthRatio < 0.26f) bot.retreat = 1.0f;
+        if (healthRatio > 0.62f) bot.retreat = 0.0f;
+
+        bot.wander += dt * randomRange(0.4f, 1.2f);
+
+        float desiredAngle = bot.wander;
+        float speedScale = 0.55f;
+        bool engaging = false;
+        float aimAngle = bot.turret;
+        float distance = 0.0f;
+
+        if (bot.target != -2) {
+            const Vec2 position = targetPosition(bot.target);
+            const Vec2 velocity = targetVelocity(bot.target);
+            distance = distanceBetween(bot.position, position);
+
+            const float bulletSpeed = base_bullet_speed * definition.bulletSpeed;
+            const float travel = distance / std::max(140.0f, bulletSpeed);
+            const Vec2 lead{position.x + velocity.x * travel * bot.accuracy,
+                            position.y + velocity.y * travel * bot.accuracy};
+
+            aimAngle = std::atan2(lead.y - bot.position.y, lead.x - bot.position.x);
+            aimAngle += (1.0f - bot.accuracy) * randomRange(-0.22f, 0.22f);
+
+            const float preferred = 380.0f + definition.bulletSpeed * 360.0f +
+                                    definition.vision * 700.0f;
+            const float toTarget = std::atan2(position.y - bot.position.y, position.x - bot.position.x);
+
+            if (bot.retreat > 0.5f) {
+                desiredAngle = toTarget + pi;
+                speedScale = 1.0f;
+            } else if (distance > preferred * 1.2f) {
+                desiredAngle = toTarget;
+                speedScale = 1.0f;
+            } else if (distance < preferred * 0.68f) {
+                desiredAngle = toTarget + pi;
+                speedScale = 0.85f;
             } else {
-                enemy.reload = 1.05f;
-                fireBullet(enemy.position, enemy.turret, 620.0f, 9.0f * damageScale, 7.0f, 1.8f, 1);
+                desiredAngle = toTarget + pi * 0.5f * (std::sin(bot.wander * 0.8f) > 0.0f ? 1.0f : -1.0f);
+                speedScale = 0.75f;
+            }
+
+            engaging = distance < preferred * 1.9f && bot.retreat < 0.5f;
+        } else {
+            float bestDistance = 2400.0f;
+            Vec2 farm{};
+            bool found = false;
+            for (const Shape& shape : shapes_) {
+                if (!shape.active) continue;
+                const float shapeDistance = distanceBetween(bot.position, shape.position);
+                if (shapeDistance < bestDistance) {
+                    bestDistance = shapeDistance;
+                    farm = shape.position;
+                    found = true;
+                }
+            }
+            if (found) {
+                desiredAngle = std::atan2(farm.y - bot.position.y, farm.x - bot.position.x);
+                aimAngle = desiredAngle;
+                speedScale = 0.8f;
+                engaging = bestDistance < 900.0f;
             }
         }
 
-        const float contact = player_radius + enemy_radius * enemy.scale;
-        if (player_.alive && distance < contact) {
-            damagePlayer(26.0f * dt * (enemy.kind == 2 ? 1.8f : 1.0f));
-            const float push = (contact - distance) * 0.5f;
-            enemy.position.x -= std::cos(toPlayer) * push;
-            enemy.position.y -= std::sin(toPlayer) * push;
+        const float moveSpeed = base_move_speed * definition.moveSpeed * slow *
+                                (0.82f + bot.aggression * 0.3f) * speedScale;
+
+        bot.heading = approachAngle(bot.heading, desiredAngle, dt * 3.6f);
+        bot.turret = approachAngle(bot.turret, aimAngle, dt * (4.0f + bot.accuracy * 6.0f));
+
+        bot.velocity.x += (std::cos(bot.heading) * moveSpeed - bot.velocity.x) * std::min(1.0f, dt * 4.0f);
+        bot.velocity.y += (std::sin(bot.heading) * moveSpeed - bot.velocity.y) * std::min(1.0f, dt * 4.0f);
+        bot.position.x += bot.velocity.x * dt;
+        bot.position.y += bot.velocity.y * dt;
+        clampToArena(bot.position, bot_radius * bot.scale);
+
+        for (std::size_t other = index + 1; other < bots_.size(); ++other) {
+            Bot& neighbour = bots_[other];
+            if (!neighbour.active) continue;
+            const float contact = (bot_radius * bot.scale + bot_radius * neighbour.scale) * 0.92f;
+            const float gap = distanceBetween(bot.position, neighbour.position);
+            if (gap >= contact || gap <= 0.001f) continue;
+            const float push = (contact - gap) * 0.5f;
+            const float angle = std::atan2(neighbour.position.y - bot.position.y,
+                                           neighbour.position.x - bot.position.x);
+            bot.position.x -= std::cos(angle) * push;
+            bot.position.y -= std::sin(angle) * push;
+            neighbour.position.x += std::cos(angle) * push;
+            neighbour.position.y += std::sin(angle) * push;
+        }
+
+        const float aimError = std::abs(wrapAngle(aimAngle - bot.turret));
+        if (engaging && aimError < 0.28f) {
+            fireWeapon(bot.position, bot.turret, definition,
+                       base_damage * definition.damage * (0.52f + static_cast<float>(bot.level) * 0.017f),
+                       1.0f, 1.0f, 1.0f, bot.team, static_cast<std::int32_t>(index), false,
+                       bot.barrelTimers, bot.recoil, bot.velocity, dt);
+        } else {
+            for (std::int32_t i = 0; i < definition.barrelCount; ++i) {
+                const std::size_t slot = static_cast<std::size_t>(i);
+                bot.barrelTimers[slot] = std::max(-1.0f, bot.barrelTimers[slot] - dt);
+            }
+        }
+
+        if (bot.team != 0 && player_.alive && !cheat(cheat_ghost)) {
+            const float contact = player_radius + bot_radius * bot.scale;
+            const float gap = distanceBetween(bot.position, player_.position);
+            if (gap < contact) {
+                damagePlayer(19.0f * definition.bodyDamage * dt);
+                const float angle = std::atan2(bot.position.y - player_.position.y,
+                                               bot.position.x - player_.position.x);
+                bot.position.x += std::cos(angle) * (contact - gap);
+                bot.position.y += std::sin(angle) * (contact - gap);
+                bot.health -= 20.0f * dt;
+                bot.flash = 1.0f;
+                if (bot.health <= 0.0f) {
+                    bot.active = false;
+                    bot.respawn = mode_ == mode_team_battle ? 5.0f : 0.0f;
+                    ++player_.kills;
+                    burst(bot.position, 0, 26, 400.0f);
+                    awardExperience(60.0f + static_cast<float>(bot.level) * 12.0f,
+                                    100.0f + static_cast<float>(bot.level) * 15.0f);
+                    addTeamScore(0, 100.0f);
+                }
+            }
         }
     }
 }
@@ -589,7 +1117,10 @@ void TankSimulation::updateEnemies(float dt) noexcept {
 void TankSimulation::updateShapes(float dt) noexcept {
     for (std::size_t i = 0; i < shapes_.size(); ++i) {
         Shape& shape = shapes_[i];
-        if (!shape.active) continue;
+        if (!shape.active) {
+            spawnShape(i, false);
+            continue;
+        }
 
         shape.flash = std::max(0.0f, shape.flash - dt * 4.0f);
         shape.rotation += shape.spin * dt;
@@ -606,27 +1137,34 @@ void TankSimulation::updateShapes(float dt) noexcept {
         }
         clampToArena(shape.position, shape.size);
 
-        if (player_.alive) {
-            const float contact = player_radius + shape.size;
-            const float distance = distanceBetween(shape.position, player_.position);
-            if (distance < contact) {
-                damagePlayer(9.0f * dt);
-                shape.health -= 26.0f * dt;
-                shape.flash = 1.0f;
-                const float angle = std::atan2(shape.position.y - player_.position.y,
-                                               shape.position.x - player_.position.x);
-                shape.position.x += std::cos(angle) * (contact - distance);
-                shape.position.y += std::sin(angle) * (contact - distance);
+        if (!player_.alive || cheat(cheat_ghost)) continue;
 
-                if (shape.health <= 0.0f) {
-                    shape.active = false;
-                    burst(shape.position, 6, 14, 240.0f);
-                    awardExperience(shape.maxHealth * 0.85f, shape.maxHealth * 0.5f);
-                    spawnShape(i, false);
-                }
-            }
+        const float contact = player_radius + shape.size;
+        const float gap = distanceBetween(shape.position, player_.position);
+        if (gap >= contact) continue;
+
+        damagePlayer(8.0f * dt);
+        shape.health -= 30.0f * dt;
+        shape.flash = 1.0f;
+        const float angle = std::atan2(shape.position.y - player_.position.y,
+                                       shape.position.x - player_.position.x);
+        shape.position.x += std::cos(angle) * (contact - gap);
+        shape.position.y += std::sin(angle) * (contact - gap);
+
+        if (shape.health <= 0.0f) {
+            shape.active = false;
+            burst(shape.position, 6, 14, 240.0f);
+            awardExperience(shape.maxHealth * 0.8f, shape.maxHealth * 0.4f);
+            addTeamScore(0, 10.0f);
         }
     }
+}
+
+void TankSimulation::resolveHit(Bullet& bullet, float damage) noexcept {
+    if (bullet.fromPlayer && cheat(cheat_vampire)) {
+        player_.health = std::min(player_.maxHealth, player_.health + damage * 0.35f);
+    }
+    if (!bullet.penetrating) bullet.active = false;
 }
 
 void TankSimulation::updateBullets(float dt) noexcept {
@@ -639,66 +1177,84 @@ void TankSimulation::updateBullets(float dt) noexcept {
             continue;
         }
 
+        if (bullet.homing) {
+            const std::int32_t target = nearestEnemyToPlayer(3000.0f);
+            if (target >= 0) {
+                const Bot& bot = bots_[static_cast<std::size_t>(target)];
+                const float desired = std::atan2(bot.position.y - bullet.position.y,
+                                                 bot.position.x - bullet.position.x);
+                const float speed = lengthOf(bullet.velocity);
+                const float current = std::atan2(bullet.velocity.y, bullet.velocity.x);
+                const float steered = approachAngle(current, desired, dt * 7.0f);
+                bullet.velocity = {std::cos(steered) * speed, std::sin(steered) * speed};
+            }
+        }
+
         bullet.position.x += bullet.velocity.x * dt;
         bullet.position.y += bullet.velocity.y * dt;
 
         if (bullet.position.x < -arenaHalfWidth_ || bullet.position.x > arenaHalfWidth_ ||
             bullet.position.y < -arenaHalfHeight_ || bullet.position.y > arenaHalfHeight_) {
             bullet.active = false;
-            burst(bullet.position, bullet.owner == 0 ? 3 : 0, 4, 120.0f);
+            burst(bullet.position, bullet.fromPlayer ? 3 : 7, 3, 110.0f);
             continue;
         }
 
-        if (bullet.owner == 0) {
-            for (Enemy& enemy : enemies_) {
-                if (!enemy.active) continue;
-                if (distanceBetween(bullet.position, enemy.position) >
-                    bullet.radius + enemy_radius * enemy.scale) {
-                    continue;
-                }
+        bool consumed = false;
 
-                enemy.health -= bullet.damage;
-                enemy.flash = 1.0f;
-                bullet.active = false;
-                burst(bullet.position, 3, 6, 180.0f);
+        for (std::size_t i = 0; i < bots_.size() && !consumed; ++i) {
+            Bot& bot = bots_[i];
+            if (!bot.active || bot.team == bullet.team) continue;
+            if (distanceBetween(bullet.position, bot.position) > bullet.radius + bot_radius * bot.scale) {
+                continue;
+            }
 
-                if (enemy.health <= 0.0f) {
-                    enemy.active = false;
+            bot.health -= bullet.damage;
+            bot.flash = 1.0f;
+            burst(bullet.position, bullet.fromPlayer ? 3 : 7, 5, 170.0f);
+            resolveHit(bullet, bullet.damage);
+            consumed = !bullet.penetrating;
+
+            if (bot.health <= 0.0f) {
+                bot.active = false;
+                bot.respawn = mode_ == mode_team_battle ? 5.0f : 0.0f;
+                burst(bot.position, 0, 26, 400.0f);
+                addTeamScore(bullet.team, 100.0f);
+                if (bullet.fromPlayer) {
                     ++player_.kills;
-                    burst(enemy.position, 0, 26, 400.0f);
-                    awardExperience(72.0f + static_cast<float>(wave_) * 9.0f,
-                                    120.0f + static_cast<float>(wave_) * 14.0f);
+                    awardExperience(80.0f + static_cast<float>(bot.level) * 14.0f,
+                                    110.0f + static_cast<float>(bot.level) * 16.0f);
                 }
-                break;
             }
+        }
 
-            if (!bullet.active) continue;
+        if (consumed) continue;
 
-            for (std::size_t i = 0; i < shapes_.size(); ++i) {
-                Shape& shape = shapes_[i];
-                if (!shape.active) continue;
-                if (distanceBetween(bullet.position, shape.position) > bullet.radius + shape.size) {
-                    continue;
-                }
-
-                shape.health -= bullet.damage;
-                shape.flash = 1.0f;
-                bullet.active = false;
-                burst(bullet.position, 6, 5, 160.0f);
-
-                if (shape.health <= 0.0f) {
-                    shape.active = false;
-                    burst(shape.position, 6, 16, 260.0f);
-                    awardExperience(shape.maxHealth * 0.85f, shape.maxHealth * 0.5f);
-                    spawnShape(i, false);
-                }
-                break;
-            }
-        } else if (player_.alive &&
-                   distanceBetween(bullet.position, player_.position) < bullet.radius + player_radius) {
-            bullet.active = false;
+        if (bullet.team != 0 && player_.alive &&
+            distanceBetween(bullet.position, player_.position) < bullet.radius + player_radius) {
             damagePlayer(bullet.damage);
-            burst(bullet.position, shieldTimer_ > 0.0f ? 1 : 0, 8, 220.0f);
+            burst(bullet.position, 0, 8, 220.0f);
+            if (!bullet.penetrating) bullet.active = false;
+            continue;
+        }
+
+        for (std::size_t i = 0; i < shapes_.size() && !consumed; ++i) {
+            Shape& shape = shapes_[i];
+            if (!shape.active) continue;
+            if (distanceBetween(bullet.position, shape.position) > bullet.radius + shape.size) continue;
+
+            shape.health -= bullet.damage;
+            shape.flash = 1.0f;
+            burst(bullet.position, 6, 5, 160.0f);
+            resolveHit(bullet, bullet.damage);
+            consumed = !bullet.penetrating;
+
+            if (shape.health <= 0.0f) {
+                shape.active = false;
+                burst(shape.position, 6, 16, 260.0f);
+                addTeamScore(bullet.team, 10.0f);
+                if (bullet.fromPlayer) awardExperience(shape.maxHealth * 0.8f, shape.maxHealth * 0.4f);
+            }
         }
     }
 }
@@ -720,36 +1276,40 @@ void TankSimulation::updateParticles(float dt) noexcept {
     }
 }
 
-void TankSimulation::updateSpawning(float dt) noexcept {
+void TankSimulation::updateDirector(float dt) noexcept {
+    if (mode_ == mode_team_battle) {
+        if (!matchOver_) {
+            matchTimer_ = std::max(0.0f, matchTimer_ - dt);
+            if (matchTimer_ <= 0.0f) {
+                matchOver_ = true;
+                winner_ = teamScore_[0] >= teamScore_[1] ? 0 : 1;
+            }
+        }
+        return;
+    }
+
     waveTimer_ += dt;
-    if (waveTimer_ >= 30.0f) {
+    if (waveTimer_ >= 38.0f) {
         waveTimer_ = 0.0f;
         ++wave_;
     }
 
-    std::int32_t target = 4;
-    switch (mode_) {
-        case 1: target = 7 + wave_; break;
-        case 2: target = 5 + wave_ * 3 / 2; break;
-        case 3: target = 2; break;
-        case 4: target = 6 + wave_; break;
-        default: target = 4 + wave_ / 2; break;
-    }
-    target = std::clamp(target, 1, static_cast<std::int32_t>(max_enemies));
-
     std::int32_t alive = 0;
-    for (const Enemy& enemy : enemies_) {
-        if (enemy.active) ++alive;
+    for (const Bot& bot : bots_) {
+        if (bot.active) ++alive;
     }
 
+    const std::int32_t target = std::clamp(3 + wave_ / 3, 1, 8);
     spawnTimer_ -= dt;
     if (alive < target && spawnTimer_ <= 0.0f) {
-        spawnEnemy();
-        spawnTimer_ = std::max(0.55f, 2.4f - static_cast<float>(wave_) * 0.09f);
-    }
-
-    for (std::size_t i = 0; i < shapes_.size(); ++i) {
-        if (!shapes_[i].active) spawnShape(i, false);
+        const float angle = randomRange(0.0f, two_pi);
+        const float radius = randomRange(1700.0f, 2300.0f);
+        const std::int32_t level = std::clamp(
+            player_.level + wave_ / 2 - 2 + static_cast<std::int32_t>(random() * 4.0f), 1, 60);
+        spawnBot(1, level,
+                 {player_.position.x + std::cos(angle) * radius,
+                  player_.position.y + std::sin(angle) * radius});
+        spawnTimer_ = std::max(0.7f, 2.6f - static_cast<float>(wave_) * 0.07f);
     }
 }
 
@@ -758,20 +1318,19 @@ void TankSimulation::step(float deltaSeconds) noexcept {
     time_ += dt;
 
     updatePlayer(dt);
-    updateEnemies(dt);
+    updateBots(dt);
     updateShapes(dt);
     updateBullets(dt);
     updateParticles(dt);
-    updateSpawning(dt);
+    updateDirector(dt);
 }
 
 void TankSimulation::snapshot(float* out, std::size_t capacity) const noexcept {
     if (out == nullptr || capacity < snapshot_floats) return;
-
     for (std::size_t i = 0; i < snapshot_floats; ++i) out[i] = 0.0f;
 
     std::int32_t activeBullets = 0;
-    std::int32_t activeEnemies = 0;
+    std::int32_t activeBots = 0;
     std::int32_t activeShapes = 0;
     std::int32_t activeParticles = 0;
 
@@ -781,29 +1340,33 @@ void TankSimulation::snapshot(float* out, std::size_t capacity) const noexcept {
         out[cursor + 0] = bullet.position.x;
         out[cursor + 1] = bullet.position.y;
         out[cursor + 2] = bullet.radius;
-        out[cursor + 3] = static_cast<float>(bullet.owner);
+        out[cursor + 3] = static_cast<float>(bullet.team);
         out[cursor + 4] = bullet.maxLife > 0.0f ? bullet.life / bullet.maxLife : 0.0f;
         out[cursor + 5] = std::atan2(bullet.velocity.y, bullet.velocity.x) * to_degrees;
+        out[cursor + 6] = bullet.fromPlayer ? 1.0f : 0.0f;
         cursor += bullet_floats;
         ++activeBullets;
     }
 
     cursor = header_floats + max_bullets * bullet_floats;
-    for (const Enemy& enemy : enemies_) {
-        if (!enemy.active) continue;
-        out[cursor + 0] = enemy.position.x;
-        out[cursor + 1] = enemy.position.y;
-        out[cursor + 2] = enemy.heading * to_degrees;
-        out[cursor + 3] = enemy.turret * to_degrees;
-        out[cursor + 4] = enemy.maxHealth > 0.0f ? enemy.health / enemy.maxHealth : 0.0f;
-        out[cursor + 5] = static_cast<float>(enemy.kind);
-        out[cursor + 6] = enemy.scale;
-        out[cursor + 7] = enemy.flash;
-        cursor += enemy_floats;
-        ++activeEnemies;
+    for (const Bot& bot : bots_) {
+        if (!bot.active) continue;
+        out[cursor + 0] = bot.position.x;
+        out[cursor + 1] = bot.position.y;
+        out[cursor + 2] = bot.heading * to_degrees;
+        out[cursor + 3] = bot.turret * to_degrees;
+        out[cursor + 4] = bot.maxHealth > 0.0f ? bot.health / bot.maxHealth : 0.0f;
+        out[cursor + 5] = static_cast<float>(bot.tankId);
+        out[cursor + 6] = bot.scale;
+        out[cursor + 7] = bot.flash;
+        out[cursor + 8] = static_cast<float>(bot.team);
+        out[cursor + 9] = static_cast<float>(bot.level);
+        out[cursor + 10] = bot.recoil;
+        cursor += bot_floats;
+        ++activeBots;
     }
 
-    cursor = header_floats + max_bullets * bullet_floats + max_enemies * enemy_floats;
+    cursor = header_floats + max_bullets * bullet_floats + max_bots * bot_floats;
     for (const Shape& shape : shapes_) {
         if (!shape.active) continue;
         out[cursor + 0] = shape.position.x;
@@ -817,7 +1380,7 @@ void TankSimulation::snapshot(float* out, std::size_t capacity) const noexcept {
         ++activeShapes;
     }
 
-    cursor = header_floats + max_bullets * bullet_floats + max_enemies * enemy_floats +
+    cursor = header_floats + max_bullets * bullet_floats + max_bots * bot_floats +
              max_shapes * shape_floats;
     for (const Particle& particle : particles_) {
         if (!particle.active) continue;
@@ -831,6 +1394,16 @@ void TankSimulation::snapshot(float* out, std::size_t capacity) const noexcept {
         ++activeParticles;
     }
 
+    const TankDefinition& definition = tankDefinition(player_.tankId);
+    std::array<std::int32_t, max_children> options{};
+    std::int32_t optionCount = 0;
+    for (std::int32_t i = 0; i < definition.childCount; ++i) {
+        const std::int32_t child = definition.children[static_cast<std::size_t>(i)];
+        if (tankDefinition(child).unlockLevel > player_.level) continue;
+        options[static_cast<std::size_t>(optionCount)] = child;
+        ++optionCount;
+    }
+
     out[0] = player_.position.x;
     out[1] = player_.position.y;
     out[2] = player_.heading * to_degrees;
@@ -838,39 +1411,46 @@ void TankSimulation::snapshot(float* out, std::size_t capacity) const noexcept {
     out[4] = lengthOf(player_.velocity);
     out[5] = player_.health;
     out[6] = player_.maxHealth;
-    out[7] = player_.energy;
-    out[8] = player_.maxEnergy;
+    out[7] = player_.xp;
+    out[8] = experienceForLevel(player_.level);
     out[9] = static_cast<float>(player_.level);
-    out[10] = player_.xp;
-    out[11] = experienceForLevel(player_.level);
-    out[12] = player_.score;
-    out[13] = cameraZoom_;
-    out[14] = std::clamp(shieldTimer_ / 4.5f, 0.0f, 1.0f);
-    out[15] = std::clamp(overdriveTimer_ / 6.0f, 0.0f, 1.0f);
-    out[16] = std::clamp(scanTimer_ / 6.5f, 0.0f, 1.0f);
-    out[17] = arenaHalfWidth_;
-    out[18] = arenaHalfHeight_;
-    out[19] = player_.alive ? 1.0f : 0.0f;
-    out[20] = static_cast<float>(wave_);
-    out[21] = static_cast<float>(player_.kills);
-    out[22] = time_;
-    out[23] = player_.reload <= 0.0f ? 1.0f : 1.0f - std::clamp(player_.reload * reloadStat(), 0.0f, 1.0f);
-    out[24] = static_cast<float>(mode_);
-    out[25] = static_cast<float>(player_.statPoints);
-    out[26] = static_cast<float>(activeBullets);
-    out[27] = static_cast<float>(activeEnemies);
-    out[28] = static_cast<float>(activeShapes);
-    out[29] = static_cast<float>(activeParticles);
-    out[30] = player_.recoil;
-    out[31] = player_.muzzleFlash;
-    out[32] = player_.damageFlash;
-    out[33] = player_.respawnTimer;
-    out[34] = threat_;
-    out[35] = static_cast<float>(hull_);
-    out[36] = static_cast<float>(graphicsQuality_);
-    out[37] = static_cast<float>(hullBarrels(hull_));
-    out[38] = regenStat();
-    out[39] = static_cast<float>(engine_api);
+    out[10] = player_.score;
+    out[11] = cameraZoom_;
+    out[12] = arenaHalfWidth_;
+    out[13] = arenaHalfHeight_;
+    out[14] = player_.alive ? 1.0f : 0.0f;
+    out[15] = player_.respawnTimer;
+    out[16] = static_cast<float>(player_.statPoints);
+    out[17] = static_cast<float>(player_.tankId);
+    out[18] = static_cast<float>(activeBullets);
+    out[19] = static_cast<float>(activeBots);
+    out[20] = static_cast<float>(activeShapes);
+    out[21] = static_cast<float>(activeParticles);
+    out[22] = player_.recoil;
+    out[23] = player_.muzzleFlash;
+    out[24] = player_.damageFlash;
+    out[25] = static_cast<float>(player_.kills);
+    out[26] = time_;
+    out[27] = static_cast<float>(mode_);
+    out[28] = teamScore_[0];
+    out[29] = teamScore_[1];
+    out[30] = matchTimer_;
+    out[31] = matchOver_ ? 1.0f : 0.0f;
+    out[32] = static_cast<float>(winner_);
+    out[33] = static_cast<float>(wave_);
+    out[34] = optionCount > 0 ? 1.0f : 0.0f;
+    out[35] = static_cast<float>(optionCount);
+    out[36] = static_cast<float>(options[0]);
+    out[37] = static_cast<float>(options[1]);
+    out[38] = static_cast<float>(options[2]);
+    out[39] = static_cast<float>(options[3]);
+    out[40] = player_.stealth;
+    for (std::size_t i = 0; i < upgrade_count; ++i) {
+        out[41 + i] = static_cast<float>(upgrades_[i]);
+    }
+    out[47] = player_.spawnGuard;
+    out[48] = static_cast<float>(tank_count);
+    out[49] = static_cast<float>(engine_api);
 }
 
 }
@@ -889,14 +1469,19 @@ Java_com_omni_tank_Engine_nativeGetLayout(JNIEnv* env, jobject) {
         static_cast<jint>(omni::tank::header_floats),
         static_cast<jint>(omni::tank::max_bullets),
         static_cast<jint>(omni::tank::bullet_floats),
-        static_cast<jint>(omni::tank::max_enemies),
-        static_cast<jint>(omni::tank::enemy_floats),
+        static_cast<jint>(omni::tank::max_bots),
+        static_cast<jint>(omni::tank::bot_floats),
         static_cast<jint>(omni::tank::max_shapes),
         static_cast<jint>(omni::tank::shape_floats),
         static_cast<jint>(omni::tank::max_particles),
         static_cast<jint>(omni::tank::particle_floats),
+        static_cast<jint>(omni::tank::tank_count),
         static_cast<jint>(omni::tank::upgrade_count),
-        static_cast<jint>(omni::tank::ability_count)
+        static_cast<jint>(omni::tank::upgrade_cap),
+        static_cast<jint>(omni::tank::cheat_toggle_count),
+        static_cast<jint>(omni::tank::cheat_action_count),
+        static_cast<jint>(omni::tank::max_barrels),
+        static_cast<jint>(omni::tank::barrel_export_floats)
     };
 
     constexpr jsize count = static_cast<jsize>(sizeof(values) / sizeof(values[0]));
@@ -909,9 +1494,7 @@ Java_com_omni_tank_Engine_nativeGetLayout(JNIEnv* env, jobject) {
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_omni_tank_Engine_nativeStep(JNIEnv* env, jobject, jfloat deltaSeconds, jfloatArray out) {
     if (out == nullptr) return JNI_FALSE;
-
-    const jsize capacity = env->GetArrayLength(out);
-    if (capacity < static_cast<jsize>(omni::tank::snapshot_floats)) return JNI_FALSE;
+    if (env->GetArrayLength(out) < static_cast<jsize>(omni::tank::snapshot_floats)) return JNI_FALSE;
 
     static thread_local std::array<float, omni::tank::snapshot_floats> buffer{};
     {
@@ -922,6 +1505,12 @@ Java_com_omni_tank_Engine_nativeStep(JNIEnv* env, jobject, jfloat deltaSeconds, 
 
     env->SetFloatArrayRegion(out, 0, static_cast<jsize>(omni::tank::snapshot_floats), buffer.data());
     return JNI_TRUE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_omni_tank_Engine_nativeStartMatch(JNIEnv*, jobject, jint mode, jint tankId) {
+    std::scoped_lock lock(gMutex);
+    gSimulation.startMatch(mode, tankId);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -936,21 +1525,11 @@ Java_com_omni_tank_Engine_nativeRespawn(JNIEnv*, jobject) {
     gSimulation.respawn();
 }
 
-extern "C" JNIEXPORT jstring JNICALL
-Java_com_omni_tank_Engine_nativeGetEngineInfo(JNIEnv* env, jobject) {
-    return env->NewStringUTF("Omni Tank Native Engine | C++26 | API 5 | Simulation AI Physics Particles");
-}
-
 extern "C" JNIEXPORT void JNICALL
-Java_com_omni_tank_Engine_nativeSetMode(JNIEnv*, jobject, jint mode) {
+Java_com_omni_tank_Engine_nativeSetInput(JNIEnv*, jobject, jfloat moveX, jfloat moveY,
+                                         jfloat aimX, jfloat aimY, jboolean firing) {
     std::scoped_lock lock(gMutex);
-    gSimulation.setMode(mode);
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_omni_tank_Engine_nativeSetHull(JNIEnv*, jobject, jint hull) {
-    std::scoped_lock lock(gMutex);
-    gSimulation.setHull(hull);
+    gSimulation.setInput(moveX, moveY, aimX, aimY, firing == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -960,22 +1539,15 @@ Java_com_omni_tank_Engine_nativeSetGraphicsQuality(JNIEnv*, jobject, jint level)
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_omni_tank_Engine_nativeSetDeveloperFlag(JNIEnv*, jobject, jint flag, jboolean enabled) {
+Java_com_omni_tank_Engine_nativeSetCheat(JNIEnv*, jobject, jint index, jboolean enabled) {
     std::scoped_lock lock(gMutex);
-    gSimulation.setDeveloperFlag(flag, enabled == JNI_TRUE);
+    gSimulation.setCheat(index, enabled == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_omni_tank_Engine_nativeSetInput(JNIEnv*, jobject, jfloat moveX, jfloat moveY,
-                                         jfloat aimX, jfloat aimY, jboolean firing) {
+Java_com_omni_tank_Engine_nativeCheatAction(JNIEnv*, jobject, jint index) {
     std::scoped_lock lock(gMutex);
-    gSimulation.setInput(moveX, moveY, aimX, aimY, firing == JNI_TRUE);
-}
-
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_omni_tank_Engine_nativeTriggerAbility(JNIEnv*, jobject, jint index) {
-    std::scoped_lock lock(gMutex);
-    return gSimulation.triggerAbility(index) ? JNI_TRUE : JNI_FALSE;
+    gSimulation.cheatAction(index);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -984,20 +1556,36 @@ Java_com_omni_tank_Engine_nativeUpgrade(JNIEnv*, jobject, jint stat) {
     return gSimulation.upgrade(stat) ? JNI_TRUE : JNI_FALSE;
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_omni_tank_Engine_nativeEvolve(JNIEnv*, jobject, jint tankId) {
+    std::scoped_lock lock(gMutex);
+    return gSimulation.evolve(tankId) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_omni_tank_Engine_nativeGetTankName(JNIEnv* env, jobject, jint id) {
+    const omni::tank::TankDefinition& definition = omni::tank::tankDefinition(id);
+    std::array<char, 64> buffer{};
+    const std::size_t length = std::min(definition.name.size(), buffer.size() - 1);
+    for (std::size_t i = 0; i < length; ++i) buffer[i] = definition.name[i];
+    return env->NewStringUTF(buffer.data());
+}
+
 extern "C" JNIEXPORT jintArray JNICALL
-Java_com_omni_tank_Engine_nativeGetUpgrades(JNIEnv* env, jobject) {
-    constexpr jsize count = static_cast<jsize>(omni::tank::upgrade_count) + 2;
-    jint values[count]{};
+Java_com_omni_tank_Engine_nativeGetTankInfo(JNIEnv* env, jobject, jint id) {
+    const omni::tank::TankDefinition& definition = omni::tank::tankDefinition(id);
+    const jint values[] = {
+        definition.tier,
+        definition.unlockLevel,
+        definition.barrelCount,
+        definition.childCount,
+        definition.children[0],
+        definition.children[1],
+        definition.children[2],
+        definition.children[3]
+    };
 
-    {
-        std::scoped_lock lock(gMutex);
-        for (jsize i = 0; i < static_cast<jsize>(omni::tank::upgrade_count); ++i) {
-            values[i] = gSimulation.upgradeLevel(static_cast<std::int32_t>(i));
-        }
-        values[count - 2] = gSimulation.statPoints();
-        values[count - 1] = gSimulation.level();
-    }
-
+    constexpr jsize count = static_cast<jsize>(sizeof(values) / sizeof(values[0]));
     jintArray result = env->NewIntArray(count);
     if (result == nullptr) return nullptr;
     env->SetIntArrayRegion(result, 0, count, values);
@@ -1005,19 +1593,61 @@ Java_com_omni_tank_Engine_nativeGetUpgrades(JNIEnv* env, jobject) {
 }
 
 extern "C" JNIEXPORT jfloatArray JNICALL
-Java_com_omni_tank_Engine_nativeGetAbilityCooldowns(JNIEnv* env, jobject) {
-    constexpr jsize count = static_cast<jsize>(omni::tank::ability_count);
+Java_com_omni_tank_Engine_nativeGetTankStats(JNIEnv* env, jobject, jint id) {
+    const omni::tank::TankDefinition& definition = omni::tank::tankDefinition(id);
+    float sustained = 0.0f;
+    for (std::int32_t i = 0; i < definition.barrelCount; ++i) {
+        sustained += definition.barrels[static_cast<std::size_t>(i)].damage;
+    }
+
+    const jfloat values[] = {
+        definition.damage * sustained * definition.reload,
+        definition.reload,
+        definition.bulletSpeed,
+        definition.moveSpeed,
+        definition.maxHealth,
+        definition.bodyDamage,
+        definition.bulletSpeed * definition.bulletLife,
+        definition.stealth,
+        static_cast<float>(definition.barrelCount)
+    };
+
+    constexpr jsize count = static_cast<jsize>(sizeof(values) / sizeof(values[0]));
+    jfloatArray result = env->NewFloatArray(count);
+    if (result == nullptr) return nullptr;
+    env->SetFloatArrayRegion(result, 0, count, values);
+    return result;
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_com_omni_tank_Engine_nativeGetTankGeometry(JNIEnv* env, jobject, jint id) {
+    const omni::tank::TankDefinition& definition = omni::tank::tankDefinition(id);
+    constexpr jsize stride = static_cast<jsize>(omni::tank::barrel_export_floats);
+    constexpr jsize count = 1 + static_cast<jsize>(omni::tank::max_barrels) * stride;
     jfloat values[count]{};
 
-    {
-        std::scoped_lock lock(gMutex);
-        for (jsize i = 0; i < count; ++i) {
-            values[i] = gSimulation.abilityCooldownRatio(static_cast<std::int32_t>(i));
-        }
+    values[0] = static_cast<jfloat>(definition.barrelCount);
+    for (std::int32_t i = 0; i < definition.barrelCount; ++i) {
+        const omni::tank::Barrel& barrel = definition.barrels[static_cast<std::size_t>(i)];
+        const jsize base = 1 + static_cast<jsize>(i) * stride;
+        values[base + 0] = barrel.angle * 57.2957795f;
+        values[base + 1] = barrel.length;
+        values[base + 2] = barrel.width;
+        values[base + 3] = barrel.offset;
+        values[base + 4] = barrel.damage;
+        values[base + 5] = barrel.speed;
+        values[base + 6] = barrel.spread;
+        values[base + 7] = barrel.delay;
+        values[base + 8] = barrel.recoilOnly;
     }
 
     jfloatArray result = env->NewFloatArray(count);
     if (result == nullptr) return nullptr;
     env->SetFloatArrayRegion(result, 0, count, values);
     return result;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_omni_tank_Engine_nativeGetEngineInfo(JNIEnv* env, jobject) {
+    return env->NewStringUTF("Omni Tank Native Engine | C++26 | API 7 | 26 hulls | team AI");
 }

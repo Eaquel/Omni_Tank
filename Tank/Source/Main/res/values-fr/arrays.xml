@@ -38,4 +38,46 @@
         <item>Español</item>
         <item>Français</item>
     </string-array>
+    <string-array name="rank_options">
+        <item>Recrue</item>
+        <item>Cadet</item>
+        <item>Sergent</item>
+        <item>Lieutenant</item>
+        <item>Capitaine</item>
+        <item>Commandant</item>
+        <item>Colonel</item>
+        <item>Général</item>
+        <item>Maréchal</item>
+        <item>Légende</item>
+    </string-array>
+    <string-array name="cheat_options">
+        <item>Mode Dieu</item>
+        <item>Aimbot</item>
+        <item>Balle Magique</item>
+        <item>Sans Recharge</item>
+        <item>Tir Fatal</item>
+        <item>Tir Rapide</item>
+        <item>Balles Géantes</item>
+        <item>Hack de Vitesse</item>
+        <item>Corps Fantôme</item>
+        <item>Portée Infinie</item>
+        <item>Sans Recul</item>
+        <item>XP x10</item>
+        <item>Ralentir Ennemis</item>
+        <item>Dézoomer</item>
+        <item>Tir Continu</item>
+        <item>Pénétration</item>
+        <item>Vampire</item>
+        <item>Geler les Bots</item>
+    </string-array>
+    <string-array name="cheat_action_options">
+        <item>Niveau +1</item>
+        <item>Niveau +10</item>
+        <item>Stats au maximum</item>
+        <item>Tout éliminer</item>
+        <item>Soin complet</item>
+        <item>Téléport au centre</item>
+        <item>+10 Points</item>
+        <item>Palier maximum</item>
+    </string-array>
 </resources>

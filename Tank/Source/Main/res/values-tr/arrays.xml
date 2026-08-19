@@ -38,4 +38,46 @@
         <item>Español</item>
         <item>Français</item>
     </string-array>
+    <string-array name="rank_options">
+        <item>Acemi</item>
+        <item>Öğrenci</item>
+        <item>Çavuş</item>
+        <item>Teğmen</item>
+        <item>Yüzbaşı</item>
+        <item>Binbaşı</item>
+        <item>Albay</item>
+        <item>General</item>
+        <item>Mareşal</item>
+        <item>Efsane</item>
+    </string-array>
+    <string-array name="cheat_options">
+        <item>Ölümsüzlük</item>
+        <item>Aimbot</item>
+        <item>Sihirli Mermi</item>
+        <item>Bekleme Yok</item>
+        <item>Tek Vuruş</item>
+        <item>Hızlı Ateş</item>
+        <item>Dev Mermi</item>
+        <item>Hız Hilesi</item>
+        <item>Hayalet Gövde</item>
+        <item>Sonsuz Menzil</item>
+        <item>Geri Tepme Yok</item>
+        <item>XP x10</item>
+        <item>Düşmanı Yavaşlat</item>
+        <item>Uzaklaş</item>
+        <item>Sürekli Ateş</item>
+        <item>Delip Geçme</item>
+        <item>Vampir</item>
+        <item>Botları Dondur</item>
+    </string-array>
+    <string-array name="cheat_action_options">
+        <item>Seviye +1</item>
+        <item>Seviye +10</item>
+        <item>Statları Doldur</item>
+        <item>Hepsini Öldür</item>
+        <item>Canı Doldur</item>
+        <item>Merkeze Işınlan</item>
+        <item>+10 Puan</item>
+        <item>Son Kademe</item>
+    </string-array>
 </resources>

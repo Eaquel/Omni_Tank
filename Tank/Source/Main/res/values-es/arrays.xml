@@ -38,4 +38,46 @@
         <item>Español</item>
         <item>Français</item>
     </string-array>
+    <string-array name="rank_options">
+        <item>Novato</item>
+        <item>Cadete</item>
+        <item>Sargento</item>
+        <item>Teniente</item>
+        <item>Capitán</item>
+        <item>Comandante</item>
+        <item>Coronel</item>
+        <item>General</item>
+        <item>Mariscal</item>
+        <item>Leyenda</item>
+    </string-array>
+    <string-array name="cheat_options">
+        <item>Modo Dios</item>
+        <item>Aimbot</item>
+        <item>Bala Mágica</item>
+        <item>Sin Recarga</item>
+        <item>Muerte Instantánea</item>
+        <item>Fuego Rápido</item>
+        <item>Balas Gigantes</item>
+        <item>Hack de Velocidad</item>
+        <item>Cuerpo Fantasma</item>
+        <item>Alcance Infinito</item>
+        <item>Sin Retroceso</item>
+        <item>XP x10</item>
+        <item>Ralentizar Enemigos</item>
+        <item>Alejar Cámara</item>
+        <item>Disparo Continuo</item>
+        <item>Penetración</item>
+        <item>Vampiro</item>
+        <item>Congelar Bots</item>
+    </string-array>
+    <string-array name="cheat_action_options">
+        <item>Nivel +1</item>
+        <item>Nivel +10</item>
+        <item>Estadísticas al máximo</item>
+        <item>Matar a todos</item>
+        <item>Curación total</item>
+        <item>Teletransporte al centro</item>
+        <item>+10 Puntos</item>
+        <item>Rango máximo</item>
+    </string-array>
 </resources>

@@ -38,4 +38,46 @@
         <item>Español</item>
         <item>Français</item>
     </string-array>
+    <string-array name="rank_options">
+        <item>Neuling</item>
+        <item>Kadett</item>
+        <item>Feldwebel</item>
+        <item>Leutnant</item>
+        <item>Hauptmann</item>
+        <item>Major</item>
+        <item>Oberst</item>
+        <item>General</item>
+        <item>Marschall</item>
+        <item>Legende</item>
+    </string-array>
+    <string-array name="cheat_options">
+        <item>Gottmodus</item>
+        <item>Aimbot</item>
+        <item>Zauberkugel</item>
+        <item>Keine Abklingzeit</item>
+        <item>Ein-Schuss-Kill</item>
+        <item>Schnellfeuer</item>
+        <item>Riesenkugeln</item>
+        <item>Speedhack</item>
+        <item>Geisterkörper</item>
+        <item>Unendliche Reichweite</item>
+        <item>Kein Rückstoß</item>
+        <item>XP x10</item>
+        <item>Gegner verlangsamen</item>
+        <item>Herauszoomen</item>
+        <item>Dauerfeuer</item>
+        <item>Durchschlag</item>
+        <item>Vampir</item>
+        <item>Bots einfrieren</item>
+    </string-array>
+    <string-array name="cheat_action_options">
+        <item>Stufe +1</item>
+        <item>Stufe +10</item>
+        <item>Werte maximieren</item>
+        <item>Alle töten</item>
+        <item>Voll heilen</item>
+        <item>Zur Mitte teleportieren</item>
+        <item>+10 Punkte</item>
+        <item>Höchster Rang</item>
+    </string-array>
 </resources>

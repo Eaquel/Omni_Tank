@@ -38,4 +38,46 @@
         <item>Español</item>
         <item>Français</item>
     </string-array>
+    <string-array name="rank_options">
+        <item>Rookie</item>
+        <item>Cadet</item>
+        <item>Sergeant</item>
+        <item>Lieutenant</item>
+        <item>Captain</item>
+        <item>Major</item>
+        <item>Colonel</item>
+        <item>General</item>
+        <item>Marshal</item>
+        <item>Legend</item>
+    </string-array>
+    <string-array name="cheat_options">
+        <item>God Mode</item>
+        <item>Aimbot</item>
+        <item>Magic Bullet</item>
+        <item>No Cooldown</item>
+        <item>One Shot Kill</item>
+        <item>Rapid Fire</item>
+        <item>Giant Bullets</item>
+        <item>Speed Hack</item>
+        <item>Ghost Body</item>
+        <item>Infinite Range</item>
+        <item>No Recoil</item>
+        <item>XP x10</item>
+        <item>Slow Enemies</item>
+        <item>Zoom Out</item>
+        <item>Always Firing</item>
+        <item>Penetration</item>
+        <item>Vampire</item>
+        <item>Freeze Bots</item>
+    </string-array>
+    <string-array name="cheat_action_options">
+        <item>Level +1</item>
+        <item>Level +10</item>
+        <item>Max Stats</item>
+        <item>Kill All</item>
+        <item>Full Heal</item>
+        <item>Teleport Centre</item>
+        <item>+10 Points</item>
+        <item>Max Tier</item>
+    </string-array>
 </resources>

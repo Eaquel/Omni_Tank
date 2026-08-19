@@ -12,7 +12,6 @@ import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
-import android.graphics.SweepGradient
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
@@ -46,6 +45,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 class Engine : ComponentActivity() {
 
@@ -54,20 +54,46 @@ class Engine : ComponentActivity() {
     private lateinit var preferences: SharedPreferences
 
     private var panel: View? = null
-    private val previews = mutableListOf<PreviewView>()
+    private val previews = mutableListOf<TankPreviewView>()
+    private val geometryCache = HashMap<Int, FloatArray>()
+    private val statsCache = HashMap<Int, FloatArray>()
+    private val infoCache = HashMap<Int, IntArray>()
+    private val nameCache = HashMap<Int, String>()
     private var vibrator: Vibrator? = null
 
     private var quality = 3
+    private var shaderMode = 0
     private var highRefresh = true
-    private var shadows = true
     private var particles = true
     private var haptics = true
     private var autoFire = true
     private var sensitivity = 1.0f
-    private var shaderMode = 0
-    private var selectedMode = 0
-    private var selectedHull = 0
-    private var selectedAbility = 0
+    private var selectedTank = 0
+    private var garageTier = 1
+
+    private var tankCount = 26
+    private var upgradeCount = 6
+    private var upgradeCap = 8
+    private var cheatToggleCount = 18
+    private var cheatActionCount = 8
+    private var barrelStride = 9
+
+    private val cheatState = BooleanArray(32)
+
+    private val tankDescriptions = intArrayOf(
+        R.string.tank_desc_0, R.string.tank_desc_1, R.string.tank_desc_2, R.string.tank_desc_3,
+        R.string.tank_desc_4, R.string.tank_desc_5, R.string.tank_desc_6, R.string.tank_desc_7,
+        R.string.tank_desc_8, R.string.tank_desc_9, R.string.tank_desc_10, R.string.tank_desc_11,
+        R.string.tank_desc_12, R.string.tank_desc_13, R.string.tank_desc_14, R.string.tank_desc_15,
+        R.string.tank_desc_16, R.string.tank_desc_17, R.string.tank_desc_18, R.string.tank_desc_19,
+        R.string.tank_desc_20, R.string.tank_desc_21, R.string.tank_desc_22, R.string.tank_desc_23,
+        R.string.tank_desc_24, R.string.tank_desc_25
+    )
+
+    private val statLabels = intArrayOf(
+        R.string.stat_damage, R.string.stat_reload, R.string.stat_bullet_speed,
+        R.string.stat_move_speed, R.string.stat_max_health, R.string.stat_regen
+    )
 
     companion object {
         private const val PREFERENCES = "omni_tank"
@@ -75,37 +101,38 @@ class Engine : ComponentActivity() {
         private const val KEY_QUALITY = "quality"
         private const val KEY_SHADER = "shader"
         private const val KEY_HIGH_REFRESH = "high_refresh"
-        private const val KEY_SHADOWS = "shadows"
         private const val KEY_PARTICLES = "particles"
         private const val KEY_HAPTICS = "haptics"
         private const val KEY_AUTO_FIRE = "auto_fire"
         private const val KEY_SENSITIVITY = "sensitivity"
-        private const val KEY_MODE = "mode"
-        private const val KEY_HULL = "hull"
-        private const val KEY_ABILITY = "ability"
+        private const val KEY_TANK = "tank"
+        private const val KEY_ACCOUNT_XP = "account_xp"
         private const val KEY_BEST = "best_score"
 
         private val LANGUAGE_TAGS = arrayOf("tr", "en", "de", "es", "fr")
+        private val GARAGE_UNLOCK = intArrayOf(1, 1, 3, 8, 16, 26)
 
-        init { System.loadLibrary("omni_tank") }
+        init {
+            System.loadLibrary("omni_tank")
+        }
     }
 
     private external fun nativeGetLayout(): IntArray
     private external fun nativeStep(deltaSeconds: Float, out: FloatArray): Boolean
+    private external fun nativeStartMatch(mode: Int, tankId: Int)
     private external fun nativeReset()
     private external fun nativeRespawn()
-    private external fun nativeGetEngineInfo(): String
-    private external fun nativeSetMode(mode: Int)
-    private external fun nativeSetHull(hull: Int)
-    private external fun nativeSetGraphicsQuality(level: Int)
-    private external fun nativeSetDeveloperFlag(flag: Int, enabled: Boolean)
     private external fun nativeSetInput(moveX: Float, moveY: Float, aimX: Float, aimY: Float, firing: Boolean)
-    private external fun nativeTriggerAbility(index: Int): Boolean
+    private external fun nativeSetGraphicsQuality(level: Int)
+    private external fun nativeSetCheat(index: Int, enabled: Boolean)
+    private external fun nativeCheatAction(index: Int)
     private external fun nativeUpgrade(stat: Int): Boolean
-    private external fun nativeGetUpgrades(): IntArray
-    private external fun nativeGetAbilityCooldowns(): FloatArray
-
-    // ---------------------------------------------------------------- lifecycle
+    private external fun nativeEvolve(tankId: Int): Boolean
+    private external fun nativeGetTankName(id: Int): String
+    private external fun nativeGetTankInfo(id: Int): IntArray
+    private external fun nativeGetTankStats(id: Int): FloatArray
+    private external fun nativeGetTankGeometry(id: Int): FloatArray
+    private external fun nativeGetEngineInfo(): String
 
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(localized(newBase))
@@ -124,11 +151,12 @@ class Engine : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        readLayoutConstants()
         preferences = getSharedPreferences(PREFERENCES, MODE_PRIVATE)
         loadPreferences()
 
         vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            (getSystemService(VibratorManager::class.java))?.defaultVibrator
+            getSystemService(VibratorManager::class.java)?.defaultVibrator
         } else {
             getSystemService(Vibrator::class.java)
         }
@@ -144,41 +172,42 @@ class Engine : ComponentActivity() {
         root.addView(arena, FrameLayout.LayoutParams(-1, -1))
         setContentView(root)
 
-        nativeSetMode(selectedMode)
-        nativeSetHull(selectedHull)
         nativeSetGraphicsQuality(quality)
-
-        showHome()
+        showLobby()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (arena.running) showPause() else showHome()
+                if (arena.handleBack()) return
+                showLobby()
             }
         })
+    }
+
+    private fun readLayoutConstants() {
+        val layout = nativeGetLayout()
+        tankCount = layout[10]
+        upgradeCount = layout[11]
+        upgradeCap = layout[12]
+        cheatToggleCount = layout[13]
+        cheatActionCount = layout[14]
+        barrelStride = layout[16]
     }
 
     private fun loadPreferences() {
         quality = preferences.getInt(KEY_QUALITY, 3)
         shaderMode = preferences.getInt(KEY_SHADER, 0)
         highRefresh = preferences.getBoolean(KEY_HIGH_REFRESH, true)
-        shadows = preferences.getBoolean(KEY_SHADOWS, true)
         particles = preferences.getBoolean(KEY_PARTICLES, true)
         haptics = preferences.getBoolean(KEY_HAPTICS, true)
         autoFire = preferences.getBoolean(KEY_AUTO_FIRE, true)
         sensitivity = preferences.getFloat(KEY_SENSITIVITY, 1.0f)
-        selectedMode = preferences.getInt(KEY_MODE, 0)
-        selectedHull = preferences.getInt(KEY_HULL, 0)
-        selectedAbility = preferences.getInt(KEY_ABILITY, 0)
+        selectedTank = preferences.getInt(KEY_TANK, 0).coerceIn(0, tankCount - 1)
     }
 
     private fun applyRefreshRate() {
         val modes = window.decorView.display?.supportedModes ?: return
         val attributes = window.attributes
-        attributes.preferredRefreshRate = if (highRefresh) {
-            modes.maxOf { it.refreshRate }
-        } else {
-            60f
-        }
+        attributes.preferredRefreshRate = if (highRefresh) modes.maxOf { it.refreshRate } else 60f
         window.attributes = attributes
     }
 
@@ -187,325 +216,278 @@ class Engine : ComponentActivity() {
         WindowCompat.getInsetsController(window, window.decorView)
             .hide(WindowInsetsCompat.Type.systemBars())
         previews.forEach { it.resume() }
-        arena.invalidate()
     }
 
     override fun onPause() {
-        if (arena.running) {
-            arena.running = false
-            showPause()
-        }
+        arena.suspendMatch()
         previews.forEach { it.pause() }
         super.onPause()
     }
 
-    // ------------------------------------------------------------------- helpers
-
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
 
-    private fun currentPalette(): Palette = Palette.of(shaderMode)
+    private fun theme(): Palette = Palette.of(shaderMode)
 
     private fun pulse(milliseconds: Long) {
         if (!haptics) return
         vibrator?.vibrate(VibrationEffect.createOneShot(milliseconds, VibrationEffect.DEFAULT_AMPLITUDE))
     }
 
-    private fun text(value: String, size: Float = 14f, color: Int = Color.rgb(226, 234, 241)): TextView =
+    private fun tankName(id: Int): String = nameCache.getOrPut(id) { nativeGetTankName(id) }
+
+    private fun tankInfo(id: Int): IntArray = infoCache.getOrPut(id) { nativeGetTankInfo(id) }
+
+    private fun tankStats(id: Int): FloatArray = statsCache.getOrPut(id) { nativeGetTankStats(id) }
+
+    private fun tankGeometry(id: Int): FloatArray = geometryCache.getOrPut(id) { nativeGetTankGeometry(id) }
+
+    private fun tankDescription(id: Int): String =
+        getString(tankDescriptions[id.coerceIn(0, tankDescriptions.size - 1)])
+
+    private fun accountXp(): Int = preferences.getInt(KEY_ACCOUNT_XP, 0)
+
+    private fun accountLevel(): Int = 1 + sqrt(accountXp() / 240.0).toInt()
+
+    private fun rankName(): String {
+        val ranks = resources.getStringArray(R.array.rank_options)
+        return ranks[(accountLevel() / 5).coerceIn(0, ranks.size - 1)]
+    }
+
+    private fun unlockLevelFor(id: Int): Int {
+        val tier = tankInfo(id)[0].coerceIn(0, GARAGE_UNLOCK.size - 1)
+        return GARAGE_UNLOCK[tier]
+    }
+
+    private fun tankUnlocked(id: Int): Boolean = accountLevel() >= unlockLevelFor(id)
+
+    private fun commitRun(score: Int) {
+        val editor = preferences.edit()
+        editor.putInt(KEY_ACCOUNT_XP, accountXp() + score)
+        if (score > preferences.getInt(KEY_BEST, 0)) editor.putInt(KEY_BEST, score)
+        editor.apply()
+    }
+
+    private fun text(value: String, size: Float = 13f, color: Int = Color.rgb(224, 232, 240)): TextView =
         TextView(this).apply {
             text = value
             textSize = size
             setTextColor(color)
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), dp(4), dp(10), dp(4))
+            setPadding(dp(10), dp(3), dp(10), dp(3))
         }
 
     private fun button(value: String, action: () -> Unit): Button = Button(this).apply {
         text = value
         isAllCaps = false
         textSize = 14f
-        minHeight = dp(42)
         setTextColor(Color.rgb(232, 240, 246))
-        setBackgroundColor(Color.argb(230, 24, 38, 52))
+        setBackgroundColor(Color.argb(232, 20, 34, 48))
         setOnClickListener { pulse(12); action() }
         layoutParams = LinearLayout.LayoutParams(-1, dp(46)).apply { setMargins(0, dp(3), 0, dp(3)) }
     }
 
-    private fun panel(title: String): LinearLayout = LinearLayout(this).apply {
+    private fun header(title: String): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(16), dp(12), dp(16), dp(12))
-        setBackgroundColor(Color.argb(246, 6, 12, 19))
+        setPadding(dp(16), dp(12), dp(16), dp(14))
+        setBackgroundColor(Color.argb(247, 6, 12, 19))
         addView(
-            text(title, 22f, currentPalette().accent).apply {
+            text(title, 21f, theme().accent).apply {
                 gravity = Gravity.CENTER
                 setTypeface(typeface, Typeface.BOLD)
-            },
-            LinearLayout.LayoutParams(-1, dp(44))
+            }
         )
     }
 
-    /** Wraps a menu body in a scroll container sized for a landscape screen. */
     private fun mount(body: LinearLayout) {
         panel?.let(root::removeView)
         previews.forEach { it.pause() }
         previews.clear()
 
         val scroll = ScrollView(this)
-        scroll.isFillViewport = false
         scroll.addView(body, FrameLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT))
-
-        val width = min(dp(520), (resources.displayMetrics.widthPixels * 0.56f).roundToInt())
-        val height = (resources.displayMetrics.heightPixels * 0.88f).roundToInt()
+        val width = min(dp(560), (resources.displayMetrics.widthPixels * 0.58f).roundToInt())
+        val height = (resources.displayMetrics.heightPixels * 0.9f).roundToInt()
         scroll.layoutParams = FrameLayout.LayoutParams(width, height, Gravity.CENTER)
 
         panel = scroll
         root.addView(scroll)
-        arena.running = false
-        arena.invalidate()
+        arena.suspendMatch()
     }
 
-    private fun spinner(options: Array<String>, selection: Int, onPick: (Int) -> Unit): Spinner =
-        Spinner(this).apply {
-            adapter = ArrayAdapter(this@Engine, android.R.layout.simple_spinner_dropdown_item, options)
-            setSelection(selection.coerceIn(0, max(0, options.size - 1)))
-            onItemSelectedListener = SelectionListener(selection) { onPick(it) }
-        }
+    private fun dismissMenu() {
+        panel?.let(root::removeView)
+        panel = null
+        previews.forEach { it.pause() }
+        previews.clear()
+    }
 
-    private fun statRow(name: String, value: Int, maximum: Int): LinearLayout =
-        LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            addView(text(name, 13f), LinearLayout.LayoutParams(0, dp(30), 1f))
-            addView(BarView(value.toFloat() / maximum.toFloat()), LinearLayout.LayoutParams(dp(120), dp(12)))
-            addView(
-                text("$value", 13f).apply { gravity = Gravity.END },
-                LinearLayout.LayoutParams(dp(46), dp(30))
-            )
-        }
-
-    // --------------------------------------------------------------------- menus
-
-    private fun showHome() {
-        val body = panel(getString(R.string.app_name))
-        body.addView(text(getString(R.string.objective_text), 13f).apply { gravity = Gravity.CENTER })
+    private fun showLobby() {
+        val body = header(getString(R.string.app_name))
+        body.addView(
+            text("${rankName()}  ·  ${getString(R.string.account_level)} ${accountLevel()}", 14f, theme().accent)
+                .apply { gravity = Gravity.CENTER }
+        )
         body.addView(
             text(
-                "${getString(R.string.best_score)}: ${preferences.getInt(KEY_BEST, 0)}",
-                13f,
-                currentPalette().accent
+                "${getString(R.string.best_score)}: ${preferences.getInt(KEY_BEST, 0)}    " +
+                    "${getString(R.string.hull_profile)}: ${tankName(selectedTank)}",
+                12f
             ).apply { gravity = Gravity.CENTER }
         )
-        body.addView(button(getString(R.string.play)) { startGame(true) })
-        body.addView(button(getString(R.string.modes)) { showModes() })
-        body.addView(button(getString(R.string.online)) { showOnline() })
+        body.addView(button(getString(R.string.survival)) { launch(0) })
+        body.addView(button(getString(R.string.team_battle)) { launch(1) })
         body.addView(button(getString(R.string.garage)) { showGarage() })
-        body.addView(button(getString(R.string.skills)) { showAbilities() })
-        body.addView(button(getString(R.string.customize)) { showCustomize() })
-        body.addView(button(getString(R.string.shop)) { showShop() })
         body.addView(button(getString(R.string.settings)) { showSettings() })
-        if (BuildConfig.DEBUG) body.addView(button(getString(R.string.developer)) { showDeveloper() })
         mount(body)
     }
 
-    private fun showModes() {
-        val body = panel(getString(R.string.mode_title))
-        body.addView(text(getString(R.string.mode_description), 13f))
-        body.addView(
-            spinner(resources.getStringArray(R.array.game_mode_options), selectedMode) {
-                selectedMode = it
-                preferences.edit().putInt(KEY_MODE, it).apply()
-                nativeSetMode(it)
-            },
-            LinearLayout.LayoutParams(-1, dp(48))
-        )
-        body.addView(text(getString(R.string.controls_hint), 12f))
-        body.addView(button(getString(R.string.start)) { startGame(true) })
-        body.addView(button(getString(R.string.back)) { showHome() })
-        mount(body)
-    }
-
-    private fun showOnline() {
-        val body = panel(getString(R.string.online_title))
-        body.addView(text(getString(R.string.online_status), 16f, currentPalette().accent))
-        body.addView(text(getString(R.string.online_ready_detail), 12f))
-        body.addView(text(getString(R.string.online_client), 12f))
-        body.addView(text(getString(R.string.online_backend_required), 12f))
-        body.addView(button(getString(R.string.online_training)) {
-            selectedMode = 3
-            nativeSetMode(3)
-            startGame(true)
-        })
-        body.addView(button(getString(R.string.back)) { showHome() })
-        mount(body)
+    private fun launch(mode: Int) {
+        val tank = if (tankUnlocked(selectedTank)) selectedTank else 0
+        dismissMenu()
+        nativeStartMatch(mode, tank)
+        nativeSetGraphicsQuality(quality)
+        for (index in 0 until cheatToggleCount) nativeSetCheat(index, cheatState[index])
+        arena.beginMatch()
     }
 
     private fun showGarage() {
-        val upgrades = nativeGetUpgrades()
-        val body = panel(getString(R.string.garage_title))
+        val body = header(getString(R.string.garage))
         body.addView(
-            text(getString(R.string.tank_name), 19f, currentPalette().accent).apply { gravity = Gravity.CENTER }
-        )
-        body.addView(PreviewView(PREVIEW_TANK).also(previews::add), LinearLayout.LayoutParams(-1, dp(140)))
-        body.addView(
-            text(
-                "${getString(R.string.level)} ${upgrades[7]}   " +
-                    "${getString(R.string.rank)}: ${getString(R.string.rank_value)}   " +
-                    "${getString(R.string.best_score)}: ${preferences.getInt(KEY_BEST, 0)}",
-                12f
-            )
-        )
-        body.addView(
-            text("${getString(R.string.stat_points)}: ${upgrades[6]}", 14f, currentPalette().accent)
+            text("${rankName()}  ·  ${getString(R.string.account_level)} ${accountLevel()}", 13f, theme().accent)
+                .apply { gravity = Gravity.CENTER }
         )
 
-        val labels = arrayOf(
-            R.string.upgrade_damage,
-            R.string.upgrade_reload,
-            R.string.upgrade_bullet_speed,
-            R.string.upgrade_move_speed,
-            R.string.upgrade_max_health,
-            R.string.upgrade_regen
-        )
-        for (index in labels.indices) {
-            val row = LinearLayout(this)
-            row.orientation = LinearLayout.HORIZONTAL
-            row.gravity = Gravity.CENTER_VERTICAL
-            row.addView(text(getString(labels[index]), 13f), LinearLayout.LayoutParams(0, dp(38), 1f))
-            row.addView(BarView(upgrades[index] / 8f), LinearLayout.LayoutParams(dp(96), dp(12)))
-            val plus = Button(this).apply {
-                text = if (upgrades[index] >= 8) getString(R.string.upgrade_max) else "+"
+        val tabs = LinearLayout(this)
+        tabs.orientation = LinearLayout.HORIZONTAL
+        for (tier in 1..5) {
+            val selected = tier == garageTier
+            val tab = Button(this).apply {
+                text = "T$tier"
                 isAllCaps = false
                 textSize = 13f
-                isEnabled = upgrades[6] > 0 && upgrades[index] < 8
-                setTextColor(Color.rgb(232, 240, 246))
-                setBackgroundColor(Color.argb(230, 26, 46, 38))
+                setTextColor(if (selected) Color.rgb(10, 16, 22) else Color.rgb(214, 226, 236))
+                setBackgroundColor(if (selected) theme().accent else Color.argb(232, 18, 30, 42))
                 setOnClickListener {
-                    if (nativeUpgrade(index)) {
-                        pulse(14)
-                        showGarage()
-                    }
+                    garageTier = tier
+                    showGarage()
                 }
             }
-            row.addView(plus, LinearLayout.LayoutParams(dp(66), dp(38)))
-            body.addView(row)
+            tabs.addView(tab, LinearLayout.LayoutParams(0, dp(42), 1f))
+        }
+        body.addView(tabs, LinearLayout.LayoutParams(-1, dp(42)))
+
+        val requirement = GARAGE_UNLOCK[garageTier]
+        if (accountLevel() < requirement) {
+            body.addView(
+                text(
+                    "${getString(R.string.locked)} · ${getString(R.string.unlock_at)} $requirement",
+                    12f, Color.rgb(232, 156, 96)
+                )
+            )
         }
 
-        if (upgrades[6] == 0) body.addView(text(getString(R.string.no_stat_points), 11f))
-        body.addView(button(getString(R.string.customize)) { showCustomize() })
-        body.addView(button(getString(R.string.back)) { showHome() })
+        for (id in 0 until tankCount) {
+            if (tankInfo(id)[0] != garageTier) continue
+            val marker = when {
+                id == selectedTank -> "* "
+                !tankUnlocked(id) -> "- "
+                else -> ""
+            }
+            body.addView(button("$marker${tankName(id)}") { showTankDetail(id) })
+        }
+
+        body.addView(button(getString(R.string.back)) { showLobby() })
         mount(body)
     }
 
-    private fun showAbilities() {
-        val body = panel(getString(R.string.abilities_title))
-        val descriptions = arrayOf(
-            R.string.ability_aegis,
-            R.string.ability_overdrive,
-            R.string.ability_repair,
-            R.string.ability_scan
-        )
-        val detail = text(getString(descriptions[selectedAbility]), 13f)
-        val preview = PreviewView(PREVIEW_ABILITY).also(previews::add)
-        preview.abilityIndex = selectedAbility
+    private fun showTankDetail(id: Int) {
+        val info = tankInfo(id)
+        val stats = tankStats(id)
+        val body = header(tankName(id))
 
-        body.addView(text(getString(R.string.ability_select), 14f))
         body.addView(
-            spinner(resources.getStringArray(R.array.ability_options), selectedAbility) {
-                selectedAbility = it
-                preferences.edit().putInt(KEY_ABILITY, it).apply()
-                preview.abilityIndex = it
-                detail.text = getString(descriptions[it])
-            },
-            LinearLayout.LayoutParams(-1, dp(48))
+            text(
+                "${getString(R.string.tier)} ${info[0]}  ·  ${getString(R.string.barrels)} ${info[2]}  ·  " +
+                    "${getString(R.string.start_level)} ${info[1]}",
+                12f, theme().accent
+            ).apply { gravity = Gravity.CENTER }
         )
-        body.addView(text(getString(R.string.preview_title), 13f, currentPalette().accent))
-        body.addView(preview, LinearLayout.LayoutParams(-1, dp(160)))
-        body.addView(detail)
-        body.addView(text(getString(R.string.preview_hint), 11f))
-        body.addView(button(getString(R.string.back)) { showHome() })
+
+        body.addView(TankPreviewView(id).also(previews::add), LinearLayout.LayoutParams(-1, dp(150)))
+
+        body.addView(statBar(getString(R.string.stat_damage), stats[0] / 4.2f))
+        body.addView(statBar(getString(R.string.stat_reload), stats[1] / 3.6f))
+        body.addView(statBar(getString(R.string.stat_bullet_speed), stats[2] / 2.1f))
+        body.addView(statBar(getString(R.string.stat_move_speed), stats[3] / 1.5f))
+        body.addView(statBar(getString(R.string.stat_max_health), stats[4] / 1.6f))
+        body.addView(statBar(getString(R.string.stat_range), stats[6] / 5.0f))
+
+        body.addView(text(tankDescription(id), 12f))
+
+        if (info[3] > 0) {
+            val children = StringBuilder()
+            for (i in 0 until info[3]) {
+                if (i > 0) children.append("  ·  ")
+                children.append(tankName(info[4 + i]))
+            }
+            body.addView(text("${getString(R.string.evolves_into)}: $children", 12f, theme().accent))
+        }
+
+        if (tankUnlocked(id)) {
+            val caption = if (id == selectedTank) getString(R.string.selected) else getString(R.string.select)
+            body.addView(
+                button(caption) {
+                    selectedTank = id
+                    preferences.edit().putInt(KEY_TANK, id).apply()
+                    showGarage()
+                }
+            )
+        } else {
+            body.addView(
+                text(
+                    "${getString(R.string.locked)} · ${getString(R.string.unlock_at)} ${unlockLevelFor(id)}",
+                    13f, Color.rgb(232, 156, 96)
+                )
+            )
+        }
+
+        body.addView(button(getString(R.string.back)) { showGarage() })
         mount(body)
     }
 
-    private fun showCustomize() {
-        val body = panel(getString(R.string.customize_title))
-        val preview = PreviewView(PREVIEW_TANK).also(previews::add)
-        preview.hullIndex = selectedHull
-        preview.shaderIndex = shaderMode
-
-        body.addView(text(getString(R.string.hull_profile), 13f))
-        body.addView(
-            spinner(resources.getStringArray(R.array.hull_profile_options), selectedHull) {
-                selectedHull = it
-                preferences.edit().putInt(KEY_HULL, it).apply()
-                nativeSetHull(it)
-                preview.hullIndex = it
-            },
-            LinearLayout.LayoutParams(-1, dp(48))
-        )
-        body.addView(preview, LinearLayout.LayoutParams(-1, dp(150)))
-
-        val profiles = arrayOf(intArrayOf(78, 74, 80), intArrayOf(94, 58, 72), intArrayOf(58, 96, 88))
-        val stats = profiles[selectedHull.coerceIn(0, 2)]
-        body.addView(statRow(getString(R.string.mobility), stats[0], 100))
-        body.addView(statRow(getString(R.string.armor), stats[1], 100))
-        body.addView(statRow(getString(R.string.energy), stats[2], 100))
-
-        body.addView(text(getString(R.string.paint_profile), 13f))
-        body.addView(
-            spinner(resources.getStringArray(R.array.shader_mode_options), shaderMode) {
-                shaderMode = it
-                preferences.edit().putInt(KEY_SHADER, it).apply()
-                preview.shaderIndex = it
-                arena.onPaletteChanged()
-            },
-            LinearLayout.LayoutParams(-1, dp(48))
-        )
-        body.addView(button(getString(R.string.apply)) { showGarage() })
-        body.addView(button(getString(R.string.back)) { showHome() })
-        mount(body)
-    }
-
-    private fun showShop() {
-        val body = panel(getString(R.string.shop_title))
-        body.addView(text("${getString(R.string.field_skin)}   ${getString(R.string.owned)}", 13f))
-        body.addView(text("${getString(R.string.desert_frame)}   ${getString(R.string.credits_2400)} ${getString(R.string.credits)}", 13f))
-        body.addView(text("${getString(R.string.arctic_frame)}   ${getString(R.string.credits_3200)} ${getString(R.string.credits)}", 13f))
-        body.addView(text("${getString(R.string.pilot_badge)}   ${getString(R.string.credits_900)} ${getString(R.string.credits)}", 13f))
-        body.addView(text(getString(R.string.coming_soon), 11f))
-        body.addView(button(getString(R.string.back)) { showHome() })
-        mount(body)
+    private fun statBar(name: String, ratio: Float): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        addView(text(name, 12f), LinearLayout.LayoutParams(0, dp(26), 1f))
+        addView(MeterView(ratio), LinearLayout.LayoutParams(dp(150), dp(10)))
     }
 
     private fun showSettings() {
-        val body = panel(getString(R.string.settings_title))
+        val body = header(getString(R.string.settings))
 
-        body.addView(text(getString(R.string.graphics_quality), 13f))
+        body.addView(text(getString(R.string.graphics_quality), 12f))
         body.addView(
             spinner(resources.getStringArray(R.array.graphics_quality_options), quality) {
                 quality = it
                 preferences.edit().putInt(KEY_QUALITY, it).apply()
                 nativeSetGraphicsQuality(it)
             },
-            LinearLayout.LayoutParams(-1, dp(48))
+            LinearLayout.LayoutParams(-1, dp(46))
         )
 
-        body.addView(text(getString(R.string.shader_mode), 13f))
+        body.addView(text(getString(R.string.shader_mode), 12f))
         body.addView(
             spinner(resources.getStringArray(R.array.shader_mode_options), shaderMode) {
                 shaderMode = it
                 preferences.edit().putInt(KEY_SHADER, it).apply()
-                arena.onPaletteChanged()
+                arena.refreshPalette()
             },
-            LinearLayout.LayoutParams(-1, dp(48))
+            LinearLayout.LayoutParams(-1, dp(46))
         )
 
         body.addView(toggle(getString(R.string.high_refresh), highRefresh) {
             highRefresh = it
             preferences.edit().putBoolean(KEY_HIGH_REFRESH, it).apply()
             applyRefreshRate()
-        })
-        body.addView(toggle(getString(R.string.shadows), shadows) {
-            shadows = it
-            preferences.edit().putBoolean(KEY_SHADOWS, it).apply()
         })
         body.addView(toggle(getString(R.string.particles), particles) {
             particles = it
@@ -520,7 +502,7 @@ class Engine : ComponentActivity() {
             preferences.edit().putBoolean(KEY_AUTO_FIRE, it).apply()
         })
 
-        body.addView(text(getString(R.string.sensitivity), 13f))
+        body.addView(text(getString(R.string.sensitivity), 12f))
         val slider = SeekBar(this)
         slider.max = 100
         slider.progress = ((sensitivity - 0.5f) / 1.5f * 100f).roundToInt().coerceIn(0, 100)
@@ -533,33 +515,40 @@ class Engine : ComponentActivity() {
             override fun onStartTrackingTouch(bar: SeekBar?) = Unit
             override fun onStopTrackingTouch(bar: SeekBar?) = Unit
         })
-        body.addView(slider, LinearLayout.LayoutParams(-1, dp(44)))
+        body.addView(slider, LinearLayout.LayoutParams(-1, dp(42)))
 
-        body.addView(text(getString(R.string.language), 13f))
+        body.addView(text(getString(R.string.language), 12f))
         body.addView(
-            spinner(resources.getStringArray(R.array.language_options), languageIndex()) {
-                applyLanguage(it)
-            },
-            LinearLayout.LayoutParams(-1, dp(48))
+            spinner(resources.getStringArray(R.array.language_options), languageIndex()) { applyLanguage(it) },
+            LinearLayout.LayoutParams(-1, dp(46))
         )
-        body.addView(button(getString(R.string.back)) { showHome() })
+
+        body.addView(text(nativeGetEngineInfo(), 10f, Color.rgb(118, 136, 150)))
+        body.addView(button(getString(R.string.back)) { showLobby() })
         mount(body)
     }
+
+    private fun spinner(options: Array<String>, selection: Int, onPick: (Int) -> Unit): Spinner =
+        Spinner(this).apply {
+            adapter = ArrayAdapter(this@Engine, android.R.layout.simple_spinner_dropdown_item, options)
+            val safe = selection.coerceIn(0, max(0, options.size - 1))
+            setSelection(safe)
+            onItemSelectedListener = SelectionListener(safe) { onPick(it) }
+        }
 
     private fun toggle(label: String, checked: Boolean, onChange: (Boolean) -> Unit): Switch =
         Switch(this).apply {
             text = label
             textSize = 13f
             isChecked = checked
-            setTextColor(Color.rgb(226, 234, 241))
+            setTextColor(Color.rgb(224, 232, 240))
             setPadding(dp(10), 0, dp(10), 0)
             setOnCheckedChangeListener { _, value -> onChange(value) }
-            layoutParams = LinearLayout.LayoutParams(-1, dp(44))
+            layoutParams = LinearLayout.LayoutParams(-1, dp(42))
         }
 
     private fun languageIndex(): Int {
-        val stored = preferences.getString(KEY_LANGUAGE, null)
-        val tag = stored ?: resources.configuration.locales[0].language
+        val tag = preferences.getString(KEY_LANGUAGE, null) ?: resources.configuration.locales[0].language
         val index = LANGUAGE_TAGS.indexOf(tag)
         return if (index >= 0) index else 1
     }
@@ -571,142 +560,63 @@ class Engine : ComponentActivity() {
         recreate()
     }
 
-    private fun showDeveloper() {
-        val body = panel(getString(R.string.developer))
-        body.addView(text(getString(R.string.developer_note), 11f))
-        body.addView(text("${getString(R.string.engine_info)}: ${nativeGetEngineInfo()}", 11f))
-        body.addView(toggle(getString(R.string.dev_invulnerability), false) { nativeSetDeveloperFlag(0, it) })
-        body.addView(toggle(getString(R.string.dev_infinite_energy), false) { nativeSetDeveloperFlag(1, it) })
-        body.addView(toggle(getString(R.string.dev_show_bounds), arena.showBounds) { arena.showBounds = it })
-        body.addView(button(getString(R.string.clear_state)) { nativeReset(); showDeveloper() })
-        body.addView(button(getString(R.string.back)) { showHome() })
-        mount(body)
-    }
-
-    private fun showPause() {
-        val body = panel(getString(R.string.pause))
-        body.addView(
-            text(
-                "${getString(R.string.score)}: ${arena.score()}   " +
-                    "${getString(R.string.kills)}: ${arena.kills()}   " +
-                    "${getString(R.string.wave)}: ${arena.wave()}",
-                13f
-            )
-        )
-        body.addView(button(getString(R.string.resume)) { startGame(false) })
-        body.addView(button(getString(R.string.upgrades)) { showGarage() })
-        body.addView(button(getString(R.string.settings)) { showSettings() })
-        body.addView(button(getString(R.string.reset)) { nativeReset(); startGame(true) })
-        body.addView(button(getString(R.string.main_menu)) { showHome() })
-        mount(body)
-    }
-
-    private fun showGameOver() {
-        val score = arena.score()
-        if (score > preferences.getInt(KEY_BEST, 0)) {
-            preferences.edit().putInt(KEY_BEST, score).apply()
-        }
-        pulse(60)
-
-        val body = panel(getString(R.string.game_over))
-        body.addView(
-            text("${getString(R.string.final_score)}: $score", 17f, currentPalette().accent)
-                .apply { gravity = Gravity.CENTER }
-        )
-        body.addView(
-            text(
-                "${getString(R.string.kills)}: ${arena.kills()}   " +
-                    "${getString(R.string.wave)}: ${arena.wave()}   " +
-                    "${getString(R.string.level)}: ${arena.level()}",
-                13f
-            ).apply { gravity = Gravity.CENTER }
-        )
-        body.addView(
-            text("${getString(R.string.best_score)}: ${preferences.getInt(KEY_BEST, 0)}", 13f)
-                .apply { gravity = Gravity.CENTER }
-        )
-        body.addView(button(getString(R.string.respawn)) { nativeRespawn(); startGame(false) })
-        body.addView(button(getString(R.string.upgrades)) { showGarage() })
-        body.addView(button(getString(R.string.reset)) { nativeReset(); startGame(true) })
-        body.addView(button(getString(R.string.main_menu)) { showHome() })
-        mount(body)
-    }
-
-    private fun startGame(fresh: Boolean) {
-        if (fresh) {
-            nativeReset()
-            nativeSetMode(selectedMode)
-            nativeSetHull(selectedHull)
-            nativeSetGraphicsQuality(quality)
-        }
-        panel?.let(root::removeView)
-        panel = null
-        previews.forEach { it.pause() }
-        previews.clear()
-        arena.onPaletteChanged()
-        arena.resumeGame()
-    }
-
-    // ------------------------------------------------------------------ palettes
-
     private class Palette(
         val background: Int,
         val backgroundEdge: Int,
         val grid: Int,
-        val hull: Int,
-        val hullLight: Int,
-        val tread: Int,
-        val turret: Int,
+        val ally: Int,
+        val allyLight: Int,
         val enemy: Int,
         val enemyLight: Int,
+        val barrel: Int,
         val square: Int,
         val triangle: Int,
         val pentagon: Int,
-        val playerBullet: Int,
+        val allyBullet: Int,
         val enemyBullet: Int,
         val accent: Int,
         val bloom: Boolean
     ) {
         companion object {
             private val MODES = arrayOf(
-                Palette( // Neon
-                    Color.rgb(6, 11, 18), Color.rgb(2, 4, 8), Color.argb(34, 132, 214, 190),
-                    Color.rgb(46, 122, 84), Color.rgb(96, 196, 128), Color.rgb(28, 74, 54),
-                    Color.rgb(74, 168, 112), Color.rgb(178, 62, 78), Color.rgb(232, 108, 116),
+                Palette(
+                    Color.rgb(7, 12, 19), Color.rgb(2, 4, 8), Color.argb(32, 130, 210, 190),
+                    Color.rgb(64, 158, 214), Color.rgb(120, 206, 250),
+                    Color.rgb(196, 74, 82), Color.rgb(244, 122, 122), Color.rgb(150, 166, 180),
                     Color.rgb(228, 186, 84), Color.rgb(226, 120, 82), Color.rgb(126, 128, 226),
-                    Color.rgb(150, 240, 176), Color.rgb(255, 136, 128), Color.rgb(122, 226, 174),
+                    Color.rgb(150, 226, 255), Color.rgb(255, 140, 130), Color.rgb(122, 226, 174),
                     true
                 ),
-                Palette( // Classic
-                    Color.rgb(24, 26, 30), Color.rgb(14, 15, 18), Color.argb(30, 210, 210, 210),
-                    Color.rgb(70, 120, 176), Color.rgb(116, 172, 224), Color.rgb(48, 82, 120),
-                    Color.rgb(96, 148, 200), Color.rgb(198, 88, 74), Color.rgb(238, 128, 110),
+                Palette(
+                    Color.rgb(26, 28, 32), Color.rgb(14, 15, 18), Color.argb(28, 210, 210, 210),
+                    Color.rgb(70, 130, 186), Color.rgb(122, 182, 232),
+                    Color.rgb(196, 88, 74), Color.rgb(238, 132, 112), Color.rgb(160, 168, 176),
                     Color.rgb(226, 200, 96), Color.rgb(226, 122, 96), Color.rgb(134, 126, 216),
-                    Color.rgb(226, 232, 238), Color.rgb(244, 150, 132), Color.rgb(126, 178, 232),
+                    Color.rgb(226, 236, 244), Color.rgb(244, 150, 132), Color.rgb(126, 178, 232),
                     false
                 ),
-                Palette( // Thermal
-                    Color.rgb(14, 6, 20), Color.rgb(4, 2, 8), Color.argb(30, 226, 122, 60),
-                    Color.rgb(188, 78, 32), Color.rgb(248, 158, 62), Color.rgb(112, 42, 20),
-                    Color.rgb(236, 122, 44), Color.rgb(74, 120, 220), Color.rgb(128, 176, 250),
+                Palette(
+                    Color.rgb(14, 6, 20), Color.rgb(4, 2, 8), Color.argb(28, 226, 122, 60),
+                    Color.rgb(240, 152, 58), Color.rgb(252, 200, 110),
+                    Color.rgb(72, 120, 224), Color.rgb(132, 180, 252), Color.rgb(176, 128, 96),
                     Color.rgb(250, 214, 96), Color.rgb(250, 148, 70), Color.rgb(214, 96, 222),
-                    Color.rgb(255, 214, 122), Color.rgb(140, 190, 255), Color.rgb(250, 168, 72),
+                    Color.rgb(255, 216, 130), Color.rgb(140, 190, 255), Color.rgb(250, 168, 72),
                     true
                 ),
-                Palette( // Blueprint
-                    Color.rgb(8, 22, 48), Color.rgb(4, 12, 28), Color.argb(56, 128, 190, 255),
-                    Color.rgb(30, 78, 140), Color.rgb(96, 168, 236), Color.rgb(22, 54, 98),
-                    Color.rgb(120, 190, 248), Color.rgb(196, 214, 240), Color.rgb(232, 242, 255),
+                Palette(
+                    Color.rgb(8, 22, 48), Color.rgb(4, 12, 28), Color.argb(52, 128, 190, 255),
+                    Color.rgb(96, 176, 244), Color.rgb(168, 216, 255),
+                    Color.rgb(226, 236, 250), Color.rgb(255, 255, 255), Color.rgb(140, 180, 220),
                     Color.rgb(150, 206, 255), Color.rgb(126, 190, 250), Color.rgb(180, 214, 255),
-                    Color.rgb(210, 236, 255), Color.rgb(255, 226, 168), Color.rgb(138, 202, 255),
+                    Color.rgb(210, 240, 255), Color.rgb(255, 226, 168), Color.rgb(138, 202, 255),
                     false
                 ),
-                Palette( // Noir
-                    Color.rgb(12, 12, 12), Color.rgb(2, 2, 2), Color.argb(26, 220, 220, 220),
-                    Color.rgb(72, 72, 72), Color.rgb(150, 150, 150), Color.rgb(44, 44, 44),
-                    Color.rgb(122, 122, 122), Color.rgb(168, 168, 168), Color.rgb(226, 226, 226),
+                Palette(
+                    Color.rgb(13, 13, 13), Color.rgb(2, 2, 2), Color.argb(24, 220, 220, 220),
+                    Color.rgb(210, 210, 210), Color.rgb(248, 248, 248),
+                    Color.rgb(112, 112, 112), Color.rgb(170, 170, 170), Color.rgb(140, 140, 140),
                     Color.rgb(196, 196, 196), Color.rgb(160, 160, 160), Color.rgb(220, 220, 220),
-                    Color.rgb(250, 250, 250), Color.rgb(206, 206, 206), Color.rgb(236, 236, 236),
+                    Color.rgb(252, 252, 252), Color.rgb(186, 186, 186), Color.rgb(236, 236, 236),
                     false
                 )
             )
@@ -715,7 +625,58 @@ class Engine : ComponentActivity() {
         }
     }
 
-    // ------------------------------------------------------------------ arena view
+    private class TankPainter {
+        private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+        private val rect = RectF()
+
+        fun draw(
+            canvas: Canvas,
+            geometry: FloatArray,
+            stride: Int,
+            radius: Float,
+            heading: Float,
+            turret: Float,
+            recoil: Float,
+            body: Int,
+            bodyLight: Int,
+            barrel: Int,
+            flash: Float
+        ) {
+            val count = geometry[0].roundToInt()
+            val kick = -recoil * 9f
+
+            canvas.save()
+            canvas.rotate(turret)
+            for (index in 0 until count) {
+                val base = 1 + index * stride
+                canvas.save()
+                canvas.rotate(geometry[base])
+                canvas.translate(0f, geometry[base + 3])
+                val length = geometry[base + 1]
+                val width = geometry[base + 2]
+                fill.color = if (geometry[base + 8] > 0.5f) darken(barrel, 0.62f) else barrel
+                rect.set(kick, -width * 0.5f, length + kick, width * 0.5f)
+                canvas.drawRoundRect(rect, 3f, 3f, fill)
+                stroke.color = darken(barrel, 0.5f)
+                stroke.strokeWidth = 4f
+                canvas.drawRoundRect(rect, 3f, 3f, stroke)
+                canvas.restore()
+            }
+            canvas.restore()
+
+            canvas.save()
+            canvas.rotate(heading)
+            fill.color = blend(body, Color.WHITE, flash * 0.8f)
+            canvas.drawCircle(0f, 0f, radius, fill)
+            stroke.color = darken(body, 0.58f)
+            stroke.strokeWidth = 6f
+            canvas.drawCircle(0f, 0f, radius, stroke)
+            fill.color = Color.argb(64, Color.red(bodyLight), Color.green(bodyLight), Color.blue(bodyLight))
+            canvas.drawCircle(-radius * 0.24f, -radius * 0.26f, radius * 0.44f, fill)
+            canvas.restore()
+        }
+    }
 
     inner class ArenaView : View(this@Engine) {
 
@@ -724,16 +685,16 @@ class Engine : ComponentActivity() {
         private val headerFloats = layout[1]
         private val maxBullets = layout[2]
         private val bulletFloats = layout[3]
-        private val maxEnemies = layout[4]
-        private val enemyFloats = layout[5]
+        private val maxBots = layout[4]
+        private val botFloats = layout[5]
         private val maxShapes = layout[6]
         private val shapeFloats = layout[7]
         private val maxParticles = layout[8]
         private val particleFloats = layout[9]
 
         private val bulletBase = headerFloats
-        private val enemyBase = bulletBase + maxBullets * bulletFloats
-        private val shapeBase = enemyBase + maxEnemies * enemyFloats
+        private val botBase = bulletBase + maxBullets * bulletFloats
+        private val shapeBase = botBase + maxBots * botFloats
         private val particleBase = shapeBase + maxShapes * shapeFloats
 
         private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -742,21 +703,24 @@ class Engine : ComponentActivity() {
         private val label = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.DEFAULT_BOLD }
         private val rect = RectF()
         private val polygon = Path()
-        private val cooldowns = FloatArray(4) { 1f }
+        private val painter = TankPainter()
+        private val slot = FloatArray(4)
+        private val cheatLabels by lazy { resources.getStringArray(R.array.cheat_options) }
+        private val actionLabels by lazy { resources.getStringArray(R.array.cheat_action_options) }
 
-        private var palette = currentPalette()
-        private var backgroundShader: Shader? = null
-        private var vignetteShader: Shader? = null
-        private var bodyShader: Shader? = null
-        private var turretShader: Shader? = null
-        private var shieldShader: Shader? = null
+        private var colors = theme()
+        private var backdrop: Shader? = null
+        private var vignette: Shader? = null
 
         private var lastNanos = SystemClock.elapsedRealtimeNanos()
         private var ambient = 0f
         private var fps = 60f
         private var cameraX = 0f
         private var cameraY = 0f
-        private var defeatHandled = false
+
+        private var overlay = OVERLAY_NONE
+        private var running = false
+        private var resultHandled = false
 
         private var movePointer = -1
         private var aimPointer = -1
@@ -768,173 +732,307 @@ class Engine : ComponentActivity() {
         private var aimOriginY = 0f
         private var aimX = 0f
         private var aimY = 0f
-
-        var running = false
-            set(value) {
-                field = value
-                if (!value) nativeSetInput(0f, 0f, 0f, 0f, false)
-                invalidate()
-            }
-
-        var showBounds = false
+        private var holdPointer = -1
+        private var holdTime = 0f
 
         init {
             isFocusable = true
-            isClickable = true
-            setLayerType(LAYER_TYPE_HARDWARE, null)
             nativeStep(0f, state)
         }
 
-        fun resumeGame() {
-            defeatHandled = false
+        fun beginMatch() {
+            overlay = OVERLAY_NONE
+            resultHandled = false
             lastNanos = SystemClock.elapsedRealtimeNanos()
+            cameraX = state[0]
+            cameraY = state[1]
             running = true
+            refreshPalette()
             requestFocus()
         }
 
-        fun onPaletteChanged() {
-            palette = currentPalette()
-            backgroundShader = null
-            bodyShader = null
-            turretShader = null
-            shieldShader = null
+        fun suspendMatch() {
+            running = false
+            releaseSticks()
+        }
+
+        fun refreshPalette() {
+            colors = theme()
+            backdrop = null
             invalidate()
         }
 
-        fun score(): Int = state[12].roundToInt()
-        fun kills(): Int = state[21].roundToInt()
-        fun wave(): Int = state[20].roundToInt()
-        fun level(): Int = state[9].roundToInt()
+        fun handleBack(): Boolean {
+            if (overlay == OVERLAY_EVOLVE || overlay == OVERLAY_CHEATS) {
+                overlay = OVERLAY_NONE
+                return true
+            }
+            if (overlay == OVERLAY_NONE && running) {
+                overlay = OVERLAY_PAUSE
+                running = false
+                releaseSticks()
+                return true
+            }
+            return false
+        }
+
+        private fun releaseSticks() {
+            movePointer = -1
+            aimPointer = -1
+            holdPointer = -1
+            moveX = 0f
+            moveY = 0f
+            aimX = 0f
+            aimY = 0f
+            nativeSetInput(0f, 0f, 0f, 0f, false)
+        }
 
         override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
             super.onSizeChanged(w, h, oldw, oldh)
-            backgroundShader = null
-            vignetteShader = null
+            backdrop = null
+            vignette = null
         }
+
+        private fun unit(): Float = min(width, height) * 0.01f
 
         private fun ensureShaders() {
-            if (backgroundShader == null && width > 0 && height > 0) {
-                backgroundShader = RadialGradient(
-                    width * 0.5f, height * 0.5f, max(width, height) * 0.78f,
-                    palette.background, palette.backgroundEdge, Shader.TileMode.CLAMP
-                )
-                vignetteShader = RadialGradient(
-                    width * 0.5f, height * 0.5f, max(width, height) * 0.62f,
-                    Color.TRANSPARENT, Color.argb(150, 0, 0, 0), Shader.TileMode.CLAMP
-                )
-            }
-            if (bodyShader == null) {
-                bodyShader = LinearGradient(
-                    0f, -72f, 0f, 72f, palette.hullLight, palette.hull, Shader.TileMode.CLAMP
-                )
-                turretShader = RadialGradient(
-                    -14f, -14f, 62f, palette.turret, palette.hull, Shader.TileMode.CLAMP
-                )
-                shieldShader = SweepGradient(
-                    0f, 0f,
-                    intArrayOf(palette.accent, Color.TRANSPARENT, palette.accent, Color.TRANSPARENT, palette.accent),
-                    null
-                )
-            }
+            if (backdrop != null || width <= 0 || height <= 0) return
+            backdrop = RadialGradient(
+                width * 0.5f, height * 0.5f, max(width, height) * 0.8f,
+                colors.background, colors.backgroundEdge, Shader.TileMode.CLAMP
+            )
+            vignette = RadialGradient(
+                width * 0.5f, height * 0.5f, max(width, height) * 0.62f,
+                Color.TRANSPARENT, Color.argb(150, 0, 0, 0), Shader.TileMode.CLAMP
+            )
         }
 
-        // ------------------------------------------------------------- input
-
-        private fun abilityButtonCenter(index: Int, out: FloatArray) {
-            val radius = buttonRadius()
-            out[0] = width - radius * 1.5f - index * radius * 2.4f
-            out[1] = height - radius * 1.6f
+        private fun statButton(index: Int, out: FloatArray) {
+            val u = unit()
+            out[0] = u * 5.2f
+            out[1] = height * 0.29f + index * u * 10.6f
+            out[2] = u * 4.4f
         }
 
-        private fun buttonRadius(): Float = min(width, height) * 0.072f
+        private fun evolveButton(out: FloatArray) {
+            val u = unit()
+            out[0] = width * 0.5f
+            out[1] = height - u * 19f
+            out[2] = u * 6.2f
+        }
 
-        private fun stickRadius(): Float = min(width, height) * 0.17f
+        private fun pauseButton(out: FloatArray) {
+            val u = unit()
+            out[0] = width - u * 6f
+            out[1] = u * 6f
+            out[2] = u * 4.2f
+        }
 
-        private fun pauseHit(x: Float, y: Float): Boolean {
-            val size = min(width, height) * 0.07f
-            return x > width - size * 1.9f && y < size * 1.9f
+        private fun cheatZone(x: Float, y: Float): Boolean {
+            val u = unit()
+            return x > u * 12f && x < u * 34f && y > height * 0.17f && y < height * 0.28f
+        }
+
+        private fun overlayCaptions(): Array<String> = when {
+            overlay == OVERLAY_PAUSE -> arrayOf(
+                getString(R.string.resume), getString(R.string.restart), getString(R.string.main_menu)
+            )
+            state[27].roundToInt() == 0 -> arrayOf(
+                getString(R.string.respawn), getString(R.string.restart), getString(R.string.main_menu)
+            )
+            else -> arrayOf(getString(R.string.restart), getString(R.string.main_menu))
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
-            if (!running) return false
+            val action = event.actionMasked
 
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
-                    val index = event.actionIndex
+            if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
+                val index = event.actionIndex
+                val id = event.getPointerId(index)
+                val x = event.getX(index)
+                val y = event.getY(index)
+
+                if (overlay != OVERLAY_NONE) {
+                    handleOverlayTouch(x, y)
+                    return true
+                }
+                if (!running) return true
+
+                pauseButton(slot)
+                if (hypot(x - slot[0], y - slot[1]) < slot[2] * 1.3f) {
+                    overlay = OVERLAY_PAUSE
+                    running = false
+                    releaseSticks()
+                    return true
+                }
+
+                evolveButton(slot)
+                if (state[34] > 0.5f && hypot(x - slot[0], y - slot[1]) < slot[2] * 1.2f) {
+                    overlay = OVERLAY_EVOLVE
+                    pulse(14)
+                    return true
+                }
+
+                var consumed = false
+                for (stat in 0 until upgradeCount) {
+                    statButton(stat, slot)
+                    if (hypot(x - slot[0], y - slot[1]) > slot[2] * 1.3f) continue
+                    if (nativeUpgrade(stat)) pulse(12)
+                    consumed = true
+                    break
+                }
+                if (consumed) return true
+
+                if (cheatZone(x, y)) {
+                    holdPointer = id
+                    holdTime = 0f
+                    return true
+                }
+
+                if (x < width * 0.5f && movePointer < 0) {
+                    movePointer = id
+                    moveOriginX = x
+                    moveOriginY = y
+                } else if (aimPointer < 0) {
+                    aimPointer = id
+                    aimOriginX = x
+                    aimOriginY = y
+                }
+            }
+
+            if (action == MotionEvent.ACTION_MOVE && overlay == OVERLAY_NONE) {
+                val radius = min(width, height) * 0.17f
+                for (index in 0 until event.pointerCount) {
                     val id = event.getPointerId(index)
                     val x = event.getX(index)
                     val y = event.getY(index)
-
-                    if (pauseHit(x, y)) {
-                        post { showPause() }
-                        return true
-                    }
-
-                    val slot = abilityHit(x, y)
-                    if (slot >= 0) {
-                        if (nativeTriggerAbility(slot)) pulse(18)
-                        return true
-                    }
-
-                    if (x < width * 0.5f && movePointer < 0) {
-                        movePointer = id
-                        moveOriginX = x
-                        moveOriginY = y
-                    } else if (aimPointer < 0) {
-                        aimPointer = id
-                        aimOriginX = x
-                        aimOriginY = y
-                    }
-                }
-
-                MotionEvent.ACTION_MOVE -> {
-                    for (index in 0 until event.pointerCount) {
-                        val id = event.getPointerId(index)
-                        val x = event.getX(index)
-                        val y = event.getY(index)
-                        val radius = stickRadius()
-
-                        if (id == movePointer) {
-                            moveX = ((x - moveOriginX) / radius * sensitivity).coerceIn(-1f, 1f)
-                            moveY = ((y - moveOriginY) / radius * sensitivity).coerceIn(-1f, 1f)
-                        } else if (id == aimPointer) {
-                            aimX = ((x - aimOriginX) / radius * sensitivity).coerceIn(-1f, 1f)
-                            aimY = ((y - aimOriginY) / radius * sensitivity).coerceIn(-1f, 1f)
-                        }
-                    }
-                }
-
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
-                    val id = event.getPointerId(event.actionIndex)
-                    if (id == movePointer || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-                        movePointer = -1
-                        moveX = 0f
-                        moveY = 0f
-                    }
-                    if (id == aimPointer || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-                        aimPointer = -1
-                        aimX = 0f
-                        aimY = 0f
+                    if (id == movePointer) {
+                        moveX = ((x - moveOriginX) / radius * sensitivity).coerceIn(-1f, 1f)
+                        moveY = ((y - moveOriginY) / radius * sensitivity).coerceIn(-1f, 1f)
+                    } else if (id == aimPointer) {
+                        aimX = ((x - aimOriginX) / radius * sensitivity).coerceIn(-1f, 1f)
+                        aimY = ((y - aimOriginY) / radius * sensitivity).coerceIn(-1f, 1f)
+                    } else if (id == holdPointer && !cheatZone(x, y)) {
+                        holdPointer = -1
                     }
                 }
             }
 
-            val firing = aimPointer >= 0 && (autoFire || hypot(aimX, aimY) > 0.55f)
-            nativeSetInput(moveX, moveY, aimX, aimY, firing)
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP ||
+                action == MotionEvent.ACTION_CANCEL
+            ) {
+                val id = event.getPointerId(event.actionIndex)
+                val cancel = action == MotionEvent.ACTION_CANCEL
+                if (id == movePointer || cancel) {
+                    movePointer = -1
+                    moveX = 0f
+                    moveY = 0f
+                }
+                if (id == aimPointer || cancel) {
+                    aimPointer = -1
+                    aimX = 0f
+                    aimY = 0f
+                }
+                if (id == holdPointer || cancel) holdPointer = -1
+            }
+
+            if (running && overlay == OVERLAY_NONE) {
+                val firing = aimPointer >= 0 && (autoFire || hypot(aimX, aimY) > 0.55f)
+                nativeSetInput(moveX, moveY, aimX, aimY, firing)
+            }
             return true
         }
 
-        private fun abilityHit(x: Float, y: Float): Int {
-            val center = FloatArray(2)
-            val radius = buttonRadius()
-            for (index in 0 until 4) {
-                abilityButtonCenter(index, center)
-                if (hypot(x - center[0], y - center[1]) <= radius * 1.15f) return index
+        private fun handleOverlayTouch(x: Float, y: Float) {
+            val u = unit()
+            when (overlay) {
+                OVERLAY_EVOLVE -> {
+                    val count = state[35].roundToInt().coerceIn(0, 4)
+                    val cardWidth = width * 0.19f
+                    val gap = width * 0.02f
+                    val total = count * cardWidth + max(0, count - 1) * gap
+                    val top = height * 0.3f
+                    val bottom = top + height * 0.4f
+                    for (index in 0 until count) {
+                        val left = width * 0.5f - total * 0.5f + index * (cardWidth + gap)
+                        if (x < left || x > left + cardWidth || y < top || y > bottom) continue
+                        if (nativeEvolve(state[36 + index].roundToInt())) {
+                            pulse(30)
+                            overlay = OVERLAY_NONE
+                        }
+                        return
+                    }
+                    overlay = OVERLAY_NONE
+                }
+
+                OVERLAY_CHEATS -> {
+                    val columns = 4
+                    val rows = 7
+                    val left = width * 0.06f
+                    val top = height * 0.13f
+                    val cellWidth = width * 0.88f / columns
+                    val cellHeight = height * 0.72f / rows
+
+                    if (y > top + rows * cellHeight || x < left || x > left + width * 0.88f) {
+                        overlay = OVERLAY_NONE
+                        return
+                    }
+
+                    val column = ((x - left) / cellWidth).toInt()
+                    val row = ((y - top) / cellHeight).toInt()
+                    if (column < 0 || column >= columns || row < 0 || row >= rows) return
+
+                    val cell = row * columns + column
+                    if (cell < cheatToggleCount) {
+                        cheatState[cell] = !cheatState[cell]
+                        nativeSetCheat(cell, cheatState[cell])
+                        pulse(14)
+                    } else if (cell < cheatToggleCount + cheatActionCount) {
+                        nativeCheatAction(cell - cheatToggleCount)
+                        pulse(22)
+                    }
+                }
+
+                OVERLAY_PAUSE, OVERLAY_RESULT -> {
+                    val captions = overlayCaptions()
+                    val buttonWidth = width * 0.2f
+                    val gap = width * 0.02f
+                    val total = captions.size * buttonWidth + (captions.size - 1) * gap
+                    val top = height * 0.58f
+                    if (y < top || y > top + u * 9f) return
+
+                    for (index in captions.indices) {
+                        val left = width * 0.5f - total * 0.5f + index * (buttonWidth + gap)
+                        if (x < left || x > left + buttonWidth) continue
+                        pulse(16)
+                        activateOverlayButton(captions[index])
+                        return
+                    }
+                }
             }
-            return -1
         }
 
-        // ------------------------------------------------------------- rendering
+        private fun activateOverlayButton(caption: String) {
+            when (caption) {
+                getString(R.string.resume) -> {
+                    overlay = OVERLAY_NONE
+                    lastNanos = SystemClock.elapsedRealtimeNanos()
+                    running = true
+                }
+                getString(R.string.respawn) -> {
+                    nativeRespawn()
+                    overlay = OVERLAY_NONE
+                    resultHandled = false
+                    lastNanos = SystemClock.elapsedRealtimeNanos()
+                    running = true
+                }
+                getString(R.string.restart) -> {
+                    nativeReset()
+                    beginMatch()
+                }
+                else -> post { showLobby() }
+            }
+        }
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
@@ -945,79 +1043,101 @@ class Engine : ComponentActivity() {
             lastNanos = now
             ambient += delta
 
-            if (running) {
-                nativeStep(delta, state)
-                if (delta > 0f) fps += (1f / delta - fps) * 0.08f
-                val cooldownValues = nativeGetAbilityCooldowns()
-                System.arraycopy(cooldownValues, 0, cooldowns, 0, min(cooldowns.size, cooldownValues.size))
-
-                if (state[19] < 0.5f && state[33] <= 0f && !defeatHandled) {
-                    defeatHandled = true
-                    running = false
-                    post { showGameOver() }
+            if (holdPointer >= 0) {
+                holdTime += delta
+                if (holdTime > 0.85f) {
+                    holdPointer = -1
+                    overlay = OVERLAY_CHEATS
+                    pulse(40)
                 }
             }
 
-            drawBackdrop(canvas)
+            if (running || overlay == OVERLAY_EVOLVE || overlay == OVERLAY_CHEATS) {
+                nativeStep(delta, state)
+                if (delta > 0f) fps += (1f / delta - fps) * 0.08f
+                checkResult()
+            }
+
+            fill.shader = backdrop
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
+            fill.shader = null
 
             val scale = viewScale()
-            cameraX += (state[0] - cameraX) * min(1f, delta * 6.4f + 0.02f)
-            cameraY += (state[1] - cameraY) * min(1f, delta * 6.4f + 0.02f)
+            val follow = min(1f, delta * 6.5f + 0.02f)
+            cameraX += (state[0] - cameraX) * follow
+            cameraY += (state[1] - cameraY) * follow
 
             canvas.save()
             canvas.translate(width * 0.5f, height * 0.5f)
             canvas.scale(scale, scale)
             canvas.translate(-cameraX, -cameraY)
             drawGrid(canvas, scale)
-            drawArenaBounds(canvas)
+            drawBounds(canvas)
             drawShapes(canvas)
-            drawEnemies(canvas)
+            drawBots(canvas)
             if (particles) drawParticles(canvas)
             drawBullets(canvas)
-            if (state[19] > 0.5f) drawPlayer(canvas)
+            if (state[14] > 0.5f) drawPlayer(canvas)
             canvas.restore()
 
             drawVignette(canvas)
             drawHud(canvas)
-            if (running) drawControls(canvas)
+            if (running && overlay == OVERLAY_NONE) drawControls(canvas)
+
+            when (overlay) {
+                OVERLAY_EVOLVE -> drawEvolveOverlay(canvas)
+                OVERLAY_CHEATS -> drawCheatOverlay(canvas)
+                OVERLAY_PAUSE -> drawPanelOverlay(canvas, getString(R.string.pause), null)
+                OVERLAY_RESULT -> drawPanelOverlay(canvas, resultTitle(), resultDetail())
+            }
 
             postInvalidateOnAnimation()
         }
 
+        private fun checkResult() {
+            if (resultHandled) return
+            val teamMode = state[27].roundToInt() == 1
+            val finished = if (teamMode) state[31] > 0.5f else state[14] < 0.5f && state[15] <= 0f
+            if (!finished) return
+
+            resultHandled = true
+            running = false
+            overlay = OVERLAY_RESULT
+            commitRun(state[10].roundToInt())
+            releaseSticks()
+        }
+
+        private fun resultTitle(): String {
+            if (state[27].roundToInt() == 0) return getString(R.string.game_over)
+            return when (state[32].roundToInt()) {
+                0 -> getString(R.string.victory)
+                1 -> getString(R.string.defeat)
+                else -> getString(R.string.draw)
+            }
+        }
+
+        private fun resultDetail(): String =
+            "${getString(R.string.score)} ${state[10].roundToInt()}    " +
+                "${getString(R.string.kills)} ${state[25].roundToInt()}    " +
+                "${getString(R.string.level)} ${state[9].roundToInt()}"
+
         private fun viewScale(): Float {
-            val zoom = state[13].coerceIn(0.8f, 1.6f)
-            return height / (1450f * zoom)
+            val wide = if (cheatState[13]) 1.9f else 1f
+            return height / (1500f * state[11].coerceIn(0.8f, 2.0f) * wide)
         }
 
-        private fun drawBackdrop(canvas: Canvas) {
-            fill.shader = backgroundShader
-            fill.style = Paint.Style.FILL
-            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
-            fill.shader = null
-        }
-
-        private fun drawVignette(canvas: Canvas) {
-            fill.shader = vignetteShader
-            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
-            fill.shader = null
-
-            val damage = state[32].coerceIn(0f, 1f)
-            if (damage > 0.01f) {
-                fill.color = Color.argb((damage * 110f).roundToInt().coerceIn(0, 110), 190, 40, 46)
-                canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
-            }
-            if (state[16] > 0.01f) {
-                fill.color = Color.argb((state[16] * 40f).roundToInt().coerceIn(0, 40), 90, 200, 255)
-                canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
-            }
+        private fun visible(x: Float, y: Float, margin: Float): Boolean {
+            val scale = viewScale()
+            return abs(x - cameraX) < width / scale * 0.5f + margin &&
+                abs(y - cameraY) < height / scale * 0.5f + margin
         }
 
         private fun drawGrid(canvas: Canvas, scale: Float) {
-            val step = 128f
+            val step = 140f
             val halfWide = width / scale * 0.5f + step
             val halfHigh = height / scale * 0.5f + step
-            stroke.color = palette.grid
-            stroke.strokeWidth = 1.4f / scale * 2f
+            stroke.color = colors.grid
+            stroke.strokeWidth = 2.6f / scale
 
             var x = (cameraX - halfWide) - (cameraX - halfWide) % step
             while (x < cameraX + halfWide) {
@@ -1031,155 +1151,103 @@ class Engine : ComponentActivity() {
             }
         }
 
-        private fun drawArenaBounds(canvas: Canvas) {
-            val halfWidth = state[17]
-            val halfHeight = state[18]
-            stroke.color = palette.accent
+        private fun drawBounds(canvas: Canvas) {
+            val halfWidth = state[12]
+            val halfHeight = state[13]
+            fill.color = Color.argb(46, 0, 0, 0)
+            canvas.drawRect(-halfWidth - 1400f, -halfHeight - 1400f, halfWidth + 1400f, -halfHeight, fill)
+            canvas.drawRect(-halfWidth - 1400f, halfHeight, halfWidth + 1400f, halfHeight + 1400f, fill)
+            canvas.drawRect(-halfWidth - 1400f, -halfHeight, -halfWidth, halfHeight, fill)
+            canvas.drawRect(halfWidth, -halfHeight, halfWidth + 1400f, halfHeight, fill)
+            stroke.color = colors.accent
             stroke.strokeWidth = 8f
             rect.set(-halfWidth, -halfHeight, halfWidth, halfHeight)
             canvas.drawRect(rect, stroke)
-
-            fill.color = Color.argb(26, Color.red(palette.accent), Color.green(palette.accent), Color.blue(palette.accent))
-            canvas.drawRect(-halfWidth - 900f, -halfHeight - 900f, halfWidth + 900f, -halfHeight, fill)
-            canvas.drawRect(-halfWidth - 900f, halfHeight, halfWidth + 900f, halfHeight + 900f, fill)
-            canvas.drawRect(-halfWidth - 900f, -halfHeight, -halfWidth, halfHeight, fill)
-            canvas.drawRect(halfWidth, -halfHeight, halfWidth + 900f, halfHeight, fill)
-        }
-
-        private fun buildPolygon(sides: Int, size: Float, rotation: Float) {
-            polygon.reset()
-            val count = max(3, sides)
-            for (i in 0 until count) {
-                val angle = rotation + i * (2.0 * Math.PI / count).toFloat()
-                val px = cos(angle) * size
-                val py = sin(angle) * size
-                if (i == 0) polygon.moveTo(px, py) else polygon.lineTo(px, py)
-            }
-            polygon.close()
         }
 
         private fun drawShapes(canvas: Canvas) {
-            val count = state[28].roundToInt().coerceIn(0, maxShapes)
+            val count = state[20].roundToInt().coerceIn(0, maxShapes)
             for (i in 0 until count) {
                 val base = shapeBase + i * shapeFloats
                 val x = state[base]
                 val y = state[base + 1]
-                if (!visible(x, y, 220f)) continue
+                if (!visible(x, y, 200f)) continue
 
                 val rotation = state[base + 2] / 57.2958f
                 val size = state[base + 3]
-                val sides = state[base + 4].roundToInt()
+                val sides = max(3, state[base + 4].roundToInt())
                 val health = state[base + 5]
                 val flash = state[base + 6]
-
                 val color = when (sides) {
-                    3 -> palette.triangle
-                    5 -> palette.pentagon
-                    else -> palette.square
+                    3 -> colors.triangle
+                    5 -> colors.pentagon
+                    else -> colors.square
                 }
 
-                canvas.save()
-                canvas.translate(x, y)
-                buildPolygon(sides, size, rotation)
-
-                if (shadows) {
-                    fill.color = Color.argb(70, 0, 0, 0)
-                    canvas.save()
-                    canvas.translate(6f, 10f)
-                    canvas.drawPath(polygon, fill)
-                    canvas.restore()
+                polygon.reset()
+                for (corner in 0 until sides) {
+                    val angle = rotation + corner * (2.0 * Math.PI / sides).toFloat()
+                    val px = x + cos(angle) * size
+                    val py = y + sin(angle) * size
+                    if (corner == 0) polygon.moveTo(px, py) else polygon.lineTo(px, py)
                 }
+                polygon.close()
 
                 fill.color = blend(color, Color.WHITE, flash * 0.7f)
                 canvas.drawPath(polygon, fill)
-                stroke.color = darken(color, 0.55f)
+                stroke.color = darken(color, 0.58f)
                 stroke.strokeWidth = 5f
                 canvas.drawPath(polygon, stroke)
 
-                if (health < 0.999f) drawHealthBar(canvas, size + 22f, size * 1.5f, health)
-                canvas.restore()
+                if (health < 0.995f) {
+                    canvas.save()
+                    canvas.translate(x, y)
+                    drawBar(canvas, size + 20f, size * 1.4f, health)
+                    canvas.restore()
+                }
             }
         }
 
-        private fun drawEnemies(canvas: Canvas) {
-            val count = state[27].roundToInt().coerceIn(0, maxEnemies)
+        private fun drawBots(canvas: Canvas) {
+            val count = state[19].roundToInt().coerceIn(0, maxBots)
             for (i in 0 until count) {
-                val base = enemyBase + i * enemyFloats
+                val base = botBase + i * botFloats
                 val x = state[base]
                 val y = state[base + 1]
-                if (!visible(x, y, 260f)) continue
+                if (!visible(x, y, 280f)) continue
 
-                val heading = state[base + 2]
-                val turret = state[base + 3]
-                val health = state[base + 4]
-                val kind = state[base + 5].roundToInt()
-                val scale = state[base + 6]
-                val flash = state[base + 7]
+                val team = state[base + 8].roundToInt()
+                val tankId = state[base + 5].roundToInt()
+                val body = if (team == 0) colors.ally else colors.enemy
+                val bodyLight = if (team == 0) colors.allyLight else colors.enemyLight
 
                 canvas.save()
                 canvas.translate(x, y)
-                canvas.scale(scale, scale)
-
-                if (shadows) {
-                    fill.color = Color.argb(80, 0, 0, 0)
-                    rect.set(-46f, -34f, 46f, 34f)
-                    canvas.save()
-                    canvas.rotate(heading)
-                    canvas.translate(5f, 12f)
-                    canvas.drawRoundRect(rect, 14f, 14f, fill)
-                    canvas.restore()
-                }
-
-                canvas.save()
-                canvas.rotate(heading)
-                fill.color = darken(palette.enemy, 0.7f)
-                rect.set(-52f, -40f, 52f, 40f)
-                canvas.drawRoundRect(rect, 12f, 12f, fill)
-                fill.color = blend(palette.enemy, Color.WHITE, flash * 0.85f)
-                rect.set(-42f, -30f, 42f, 30f)
-                canvas.drawRoundRect(rect, 10f, 10f, fill)
-                canvas.restore()
-
-                canvas.save()
-                canvas.rotate(turret)
-                fill.color = darken(palette.enemy, 0.62f)
-                rect.set(-10f, -12f, 66f, 12f)
-                canvas.drawRoundRect(rect, 5f, 5f, fill)
-                if (kind == 2) {
-                    rect.set(-10f, -26f, 52f, -14f)
-                    canvas.drawRoundRect(rect, 5f, 5f, fill)
-                    rect.set(-10f, 14f, 52f, 26f)
-                    canvas.drawRoundRect(rect, 5f, 5f, fill)
-                }
-                canvas.restore()
-
-                fill.color = blend(palette.enemyLight, Color.WHITE, flash)
-                canvas.drawCircle(0f, 0f, if (kind == 1) 22f else 26f, fill)
-                stroke.color = darken(palette.enemy, 0.5f)
-                stroke.strokeWidth = 4f
-                canvas.drawCircle(0f, 0f, if (kind == 1) 22f else 26f, stroke)
-
-                drawHealthBar(canvas, 60f, 74f, health)
+                canvas.scale(state[base + 6], state[base + 6])
+                painter.draw(canvas, tankGeometry(tankId), barrelStride, 42f,
+                    state[base + 2], state[base + 3], state[base + 10],
+                    body, bodyLight, colors.barrel, state[base + 7])
+                drawBar(canvas, 56f, 56f, state[base + 4])
+                label.color = Color.argb(190, 224, 234, 242)
+                label.textSize = 21f
+                canvas.drawText("${tankName(tankId)} ${state[base + 9].roundToInt()}", -52f, -60f, label)
                 canvas.restore()
             }
         }
 
-        private fun drawHealthBar(canvas: Canvas, offset: Float, halfWidth: Float, ratio: Float) {
+        private fun drawBar(canvas: Canvas, offset: Float, halfWidth: Float, ratio: Float) {
             fill.color = Color.argb(190, 10, 14, 20)
-            rect.set(-halfWidth, offset, halfWidth, offset + 11f)
+            rect.set(-halfWidth, offset, halfWidth, offset + 10f)
             canvas.drawRoundRect(rect, 5f, 5f, fill)
             fill.color = if (ratio > 0.4f) Color.rgb(96, 208, 128) else Color.rgb(224, 96, 88)
-            rect.set(-halfWidth, offset, -halfWidth + halfWidth * 2f * ratio.coerceIn(0f, 1f), offset + 11f)
+            rect.set(-halfWidth, offset, -halfWidth + halfWidth * 2f * ratio.coerceIn(0f, 1f), offset + 10f)
             canvas.drawRoundRect(rect, 5f, 5f, fill)
         }
 
         private fun drawBullets(canvas: Canvas) {
-            val count = state[26].roundToInt().coerceIn(0, maxBullets)
-            val useGlow = palette.bloom && quality >= 2
-
-            if (useGlow) {
-                glow.maskFilter = BlurMaskFilter(22f, BlurMaskFilter.Blur.NORMAL)
-            }
+            val count = state[18].roundToInt().coerceIn(0, maxBullets)
+            val useGlow = colors.bloom && quality >= 2
+            if (useGlow) glow.maskFilter = BlurMaskFilter(20f, BlurMaskFilter.Blur.NORMAL)
 
             for (i in 0 until count) {
                 val base = bulletBase + i * bulletFloats
@@ -1188,27 +1256,24 @@ class Engine : ComponentActivity() {
                 if (!visible(x, y, 90f)) continue
 
                 val radius = state[base + 2]
-                val owner = state[base + 3].roundToInt()
                 val life = state[base + 4].coerceIn(0f, 1f)
-                val color = if (owner == 0) palette.playerBullet else palette.enemyBullet
+                val color = if (state[base + 3].roundToInt() == 0) colors.allyBullet else colors.enemyBullet
 
                 if (useGlow) {
-                    glow.color = Color.argb((110 * life).roundToInt().coerceIn(0, 110),
+                    glow.color = Color.argb((100 * life).roundToInt().coerceIn(0, 100),
                         Color.red(color), Color.green(color), Color.blue(color))
-                    canvas.drawCircle(x, y, radius * 2.1f, glow)
+                    canvas.drawCircle(x, y, radius * 2f, glow)
                 }
-
-                fill.color = darken(color, 0.55f)
-                canvas.drawCircle(x, y, radius * 1.45f, fill)
+                fill.color = darken(color, 0.6f)
+                canvas.drawCircle(x, y, radius * 1.35f, fill)
                 fill.color = color
                 canvas.drawCircle(x, y, radius, fill)
             }
-
             if (useGlow) glow.maskFilter = null
         }
 
         private fun drawParticles(canvas: Canvas) {
-            val count = state[29].roundToInt().coerceIn(0, maxParticles)
+            val count = state[21].roundToInt().coerceIn(0, maxParticles)
             for (i in 0 until count) {
                 val base = particleBase + i * particleFloats
                 val x = state[base]
@@ -1216,426 +1281,430 @@ class Engine : ComponentActivity() {
                 if (!visible(x, y, 80f)) continue
 
                 val life = state[base + 2].coerceIn(0f, 1f)
-                val size = state[base + 3]
                 val color = when (state[base + 4].roundToInt()) {
-                    1 -> palette.accent
-                    2 -> palette.enemy
-                    3 -> palette.playerBullet
+                    1 -> colors.accent
+                    2 -> colors.enemy
+                    3 -> colors.allyBullet
                     4 -> Color.rgb(126, 226, 160)
-                    5 -> Color.rgb(120, 200, 255)
-                    6 -> palette.square
+                    6 -> colors.square
+                    7 -> colors.enemyBullet
                     else -> Color.rgb(238, 156, 96)
                 }
-                fill.color = Color.argb((life * 210f).roundToInt().coerceIn(0, 210),
+                fill.color = Color.argb((life * 200f).roundToInt().coerceIn(0, 200),
                     Color.red(color), Color.green(color), Color.blue(color))
-                canvas.drawCircle(x, y, size * (0.4f + life * 0.9f), fill)
+                canvas.drawCircle(x, y, state[base + 3] * (0.4f + life * 0.9f), fill)
             }
         }
 
         private fun drawPlayer(canvas: Canvas) {
-            val x = state[0]
-            val y = state[1]
-            val heading = state[2]
-            val turret = state[3]
-            val recoil = state[30]
-            val barrels = state[37].roundToInt().coerceAtLeast(1)
-
+            val stealth = state[40].coerceIn(0.12f, 1f)
             canvas.save()
-            canvas.translate(x, y)
+            canvas.translate(state[0], state[1])
 
-            if (shadows) {
-                fill.shader = null
-                fill.color = Color.argb(110, 0, 0, 0)
-                canvas.save()
-                canvas.rotate(heading)
-                canvas.translate(6f, 14f)
-                rect.set(-58f, -46f, 58f, 46f)
-                canvas.drawRoundRect(rect, 16f, 16f, fill)
-                canvas.restore()
+            if (stealth < 0.98f) {
+                fill.color = Color.argb((stealth * 80f).roundToInt().coerceIn(0, 80), 200, 220, 240)
+                canvas.drawCircle(0f, 0f, 54f, fill)
             }
 
-            canvas.save()
-            canvas.rotate(heading)
+            painter.draw(canvas, tankGeometry(state[17].roundToInt()), barrelStride, 44f,
+                state[2], state[3], state[22], colors.ally, colors.allyLight, colors.barrel, 0f)
 
-            // Treads with an animated pattern so movement reads at a glance.
-            fill.color = palette.tread
-            rect.set(-56f, -54f, 56f, -36f)
-            canvas.drawRoundRect(rect, 8f, 8f, fill)
-            rect.set(-56f, 36f, 56f, 54f)
-            canvas.drawRoundRect(rect, 8f, 8f, fill)
-
-            fill.color = darken(palette.tread, 0.65f)
-            val offset = (ambient * state[4] * 0.05f) % 16f
-            var tread = -56f + offset
-            while (tread < 56f) {
-                rect.set(tread, -54f, tread + 5f, -36f)
-                canvas.drawRect(rect, fill)
-                rect.set(tread, 36f, tread + 5f, 54f)
-                canvas.drawRect(rect, fill)
-                tread += 16f
-            }
-
-            fill.shader = bodyShader
-            rect.set(-52f, -40f, 52f, 40f)
-            canvas.drawRoundRect(rect, 14f, 14f, fill)
-            fill.shader = null
-            stroke.color = darken(palette.hull, 0.55f)
-            stroke.strokeWidth = 5f
-            canvas.drawRoundRect(rect, 14f, 14f, stroke)
-            canvas.restore()
-
-            // Turret and barrels.
-            canvas.save()
-            canvas.rotate(turret)
-            val kick = -recoil * 12f
-            fill.color = darken(palette.turret, 0.7f)
-            if (barrels == 1) {
-                rect.set(-12f + kick, -15f, 96f + kick, 15f)
-                canvas.drawRoundRect(rect, 6f, 6f, fill)
-            } else {
-                rect.set(-12f + kick, -30f, 88f + kick, -6f)
-                canvas.drawRoundRect(rect, 6f, 6f, fill)
-                rect.set(-12f + kick, 6f, 88f + kick, 30f)
-                canvas.drawRoundRect(rect, 6f, 6f, fill)
-            }
-
-            val flash = state[31]
-            if (flash > 0.02f) {
-                fill.color = Color.argb((flash * 220f).roundToInt().coerceIn(0, 220), 255, 236, 176)
-                canvas.drawCircle(100f + kick, 0f, 16f * flash + 6f, fill)
-            }
-
-            fill.shader = turretShader
-            canvas.drawCircle(0f, 0f, 34f, fill)
-            fill.shader = null
-            stroke.color = darken(palette.hull, 0.5f)
-            stroke.strokeWidth = 5f
-            canvas.drawCircle(0f, 0f, 34f, stroke)
-            canvas.restore()
-
-            // Ability auras.
-            if (state[14] > 0.01f) {
-                stroke.shader = shieldShader
-                stroke.strokeWidth = 7f + state[14] * 6f
-                canvas.save()
-                canvas.rotate(ambient * 90f)
-                canvas.drawCircle(0f, 0f, 86f, stroke)
-                canvas.restore()
-                stroke.shader = null
-            }
-            if (state[15] > 0.01f) {
-                stroke.color = Color.argb((state[15] * 170f).roundToInt().coerceIn(0, 170), 255, 196, 96)
-                stroke.strokeWidth = 5f
-                canvas.drawCircle(0f, 0f, 74f + sin(ambient * 9f) * 5f, stroke)
-            }
-            if (state[16] > 0.01f) {
-                stroke.color = Color.argb((state[16] * 130f).roundToInt().coerceIn(0, 130), 120, 200, 255)
-                stroke.strokeWidth = 4f
-                val sweep = (ambient * 320f) % 900f
-                canvas.drawCircle(0f, 0f, 90f + sweep, stroke)
-            }
-
-            if (showBounds) {
-                stroke.color = Color.argb(160, 255, 90, 90)
-                stroke.strokeWidth = 3f
-                canvas.drawCircle(0f, 0f, 46f, stroke)
+            if (state[47] > 0.01f) {
+                stroke.color = Color.argb(180, Color.red(colors.accent), Color.green(colors.accent),
+                    Color.blue(colors.accent))
+                stroke.strokeWidth = 6f
+                canvas.drawCircle(0f, 0f, 64f + sin(ambient * 10f) * 4f, stroke)
             }
             canvas.restore()
         }
 
-        private fun visible(x: Float, y: Float, margin: Float): Boolean {
-            val scale = viewScale()
-            val halfWide = width / scale * 0.5f + margin
-            val halfHigh = height / scale * 0.5f + margin
-            return abs(x - cameraX) < halfWide && abs(y - cameraY) < halfHigh
-        }
+        private fun drawVignette(canvas: Canvas) {
+            fill.shader = vignette
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
+            fill.shader = null
 
-        // ------------------------------------------------------------- hud
+            val damage = state[24].coerceIn(0f, 1f)
+            if (damage > 0.01f) {
+                fill.color = Color.argb((damage * 110f).roundToInt().coerceIn(0, 110), 190, 40, 46)
+                canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
+            }
+        }
 
         private fun drawHud(canvas: Canvas) {
-            val unit = min(width, height) * 0.01f
+            val u = unit()
             fill.shader = null
 
-            // Level and experience.
             fill.color = Color.argb(214, 6, 12, 19)
-            rect.set(unit * 2f, unit * 2f, unit * 34f, unit * 12.5f)
-            canvas.drawRoundRect(rect, unit, unit, fill)
+            rect.set(u * 2f, u * 2f, u * 34f, u * 15f)
+            canvas.drawRoundRect(rect, u, u, fill)
 
-            label.color = palette.accent
-            label.textSize = unit * 3.4f
+            label.color = colors.accent
+            label.textSize = u * 3f
             canvas.drawText(
-                "${getString(R.string.level)} ${state[9].roundToInt()}",
-                unit * 4f, unit * 6.4f, label
+                "${getString(R.string.level)} ${state[9].roundToInt()}  ${tankName(state[17].roundToInt())}",
+                u * 3.5f, u * 6.4f, label
             )
             label.color = Color.rgb(214, 226, 236)
-            label.textSize = unit * 2.4f
+            label.textSize = u * 2.2f
             canvas.drawText(
-                "${getString(R.string.score)} ${state[12].roundToInt()}   " +
-                    "${getString(R.string.kills)} ${state[21].roundToInt()}   " +
-                    "${getString(R.string.wave)} ${state[20].roundToInt()}",
-                unit * 4f, unit * 10.6f, label
+                "${getString(R.string.score)} ${state[10].roundToInt()}   " +
+                    "${getString(R.string.kills)} ${state[25].roundToInt()}",
+                u * 3.5f, u * 10f, label
             )
 
-            val xpRatio = if (state[11] > 0f) (state[10] / state[11]).coerceIn(0f, 1f) else 0f
+            val xpRatio = if (state[8] > 0f) (state[7] / state[8]).coerceIn(0f, 1f) else 0f
             fill.color = Color.argb(180, 18, 26, 34)
-            rect.set(unit * 2f, unit * 13f, unit * 34f, unit * 15f)
-            canvas.drawRoundRect(rect, unit * 0.8f, unit * 0.8f, fill)
-            fill.color = palette.accent
-            rect.set(unit * 2f, unit * 13f, unit * 2f + unit * 32f * xpRatio, unit * 15f)
-            canvas.drawRoundRect(rect, unit * 0.8f, unit * 0.8f, fill)
+            rect.set(u * 3.5f, u * 11.6f, u * 32.5f, u * 13.4f)
+            canvas.drawRoundRect(rect, u * 0.8f, u * 0.8f, fill)
+            fill.color = colors.accent
+            rect.set(u * 3.5f, u * 11.6f, u * 3.5f + u * 29f * xpRatio, u * 13.4f)
+            canvas.drawRoundRect(rect, u * 0.8f, u * 0.8f, fill)
 
-            if (state[25] > 0.5f) {
-                label.color = Color.rgb(250, 214, 120)
-                label.textSize = unit * 2.3f
-                canvas.drawText(
-                    "${getString(R.string.stat_points)}: ${state[25].roundToInt()}",
-                    unit * 2f, unit * 18f, label
+            if (state[27].roundToInt() == 1) drawTeamBanner(canvas, u) else drawWaveBanner(canvas, u)
+
+            drawStatColumn(canvas, u)
+            drawHealth(canvas, u)
+            drawMinimap(canvas, u)
+            drawPauseControl(canvas, u)
+
+            if (state[34] > 0.5f && overlay == OVERLAY_NONE) {
+                evolveButton(slot)
+                fill.color = colors.accent
+                canvas.drawCircle(slot[0], slot[1], slot[2] * (1f + sin(ambient * 6f) * 0.05f), fill)
+                label.color = Color.rgb(10, 16, 22)
+                label.textSize = u * 2.1f
+                val caption = getString(R.string.evolve)
+                canvas.drawText(caption, slot[0] - caption.length * u * 0.58f, slot[1] + u * 0.8f, label)
+            }
+
+            label.color = Color.argb(140, 220, 232, 242)
+            label.textSize = u * 1.8f
+            canvas.drawText("${getString(R.string.fps)} ${fps.roundToInt()}", u * 2f, height - u * 1.4f, label)
+        }
+
+        private fun drawTeamBanner(canvas: Canvas, u: Float) {
+            val seconds = state[30].roundToInt()
+            fill.color = Color.argb(214, 6, 12, 19)
+            rect.set(width * 0.5f - u * 20f, u * 1.6f, width * 0.5f + u * 20f, u * 9f)
+            canvas.drawRoundRect(rect, u, u, fill)
+
+            label.textSize = u * 3.2f
+            label.color = colors.allyLight
+            canvas.drawText("${state[28].roundToInt()}", width * 0.5f - u * 18f, u * 6.6f, label)
+            label.color = colors.enemyLight
+            canvas.drawText("${state[29].roundToInt()}", width * 0.5f + u * 9f, u * 6.6f, label)
+            label.color = Color.rgb(226, 236, 244)
+            label.textSize = u * 2.6f
+            canvas.drawText(
+                "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}",
+                width * 0.5f - u * 3.2f, u * 6.4f, label
+            )
+        }
+
+        private fun drawWaveBanner(canvas: Canvas, u: Float) {
+            fill.color = Color.argb(214, 6, 12, 19)
+            rect.set(width * 0.5f - u * 12f, u * 1.6f, width * 0.5f + u * 12f, u * 7.4f)
+            canvas.drawRoundRect(rect, u, u, fill)
+            label.color = colors.accent
+            label.textSize = u * 2.6f
+            val caption = "${getString(R.string.wave)} ${state[33].roundToInt()}"
+            canvas.drawText(caption, width * 0.5f - caption.length * u * 0.7f, u * 5.6f, label)
+        }
+
+        private fun drawStatColumn(canvas: Canvas, u: Float) {
+            val points = state[16].roundToInt()
+            for (stat in 0 until upgradeCount) {
+                statButton(stat, slot)
+                val level = state[41 + stat].roundToInt()
+                val ready = points > 0 && level < upgradeCap
+
+                fill.color = Color.argb(if (ready) 224 else 148, 8, 16, 24)
+                canvas.drawCircle(slot[0], slot[1], slot[2], fill)
+                stroke.color = if (ready) colors.accent else Color.argb(105, 150, 170, 186)
+                stroke.strokeWidth = slot[2] * 0.12f
+                canvas.drawCircle(slot[0], slot[1], slot[2], stroke)
+
+                label.color = if (ready) colors.accent else Color.argb(160, 200, 214, 226)
+                label.textSize = u * 2f
+                canvas.drawText("$level", slot[0] - u * 0.6f, slot[1] + u * 0.7f, label)
+
+                label.textSize = u * 1.5f
+                label.color = Color.argb(185, 214, 226, 236)
+                canvas.drawText(getString(statLabels[stat]), slot[0] + slot[2] * 1.35f, slot[1] + u * 0.5f, label)
+            }
+
+            if (points > 0) {
+                label.color = colors.accent
+                label.textSize = u * 2.2f
+                canvas.drawText("+$points", u * 3f, height * 0.29f - u * 6f, label)
+            }
+        }
+
+        private fun drawHealth(canvas: Canvas, u: Float) {
+            val barWidth = width * 0.3f
+            val left = width * 0.5f - barWidth * 0.5f
+            val top = height - u * 8f
+            val ratio = if (state[6] > 0f) (state[5] / state[6]).coerceIn(0f, 1f) else 0f
+
+            fill.color = Color.argb(196, 8, 14, 21)
+            rect.set(left - u, top - u, left + barWidth + u, top + u * 4f)
+            canvas.drawRoundRect(rect, u, u, fill)
+            fill.color = Color.argb(190, 20, 28, 36)
+            rect.set(left, top, left + barWidth, top + u * 3f)
+            canvas.drawRoundRect(rect, u * 0.9f, u * 0.9f, fill)
+            fill.color = if (ratio > 0.35f) Color.rgb(92, 208, 126) else Color.rgb(226, 92, 84)
+            rect.set(left, top, left + barWidth * ratio, top + u * 3f)
+            canvas.drawRoundRect(rect, u * 0.9f, u * 0.9f, fill)
+
+            label.color = Color.WHITE
+            label.textSize = u * 2f
+            canvas.drawText("${state[5].roundToInt()} / ${state[6].roundToInt()}", left, top - u * 1.4f, label)
+        }
+
+        private fun drawMinimap(canvas: Canvas, u: Float) {
+            val halfWidth = state[12]
+            val halfHeight = state[13]
+            if (halfWidth <= 0f || halfHeight <= 0f) return
+
+            val size = u * 19f
+            val left = width - size - u * 2f
+            val top = u * 12f
+            val mapHeight = size * (halfHeight / halfWidth)
+
+            fill.color = Color.argb(180, 6, 12, 19)
+            rect.set(left, top, left + size, top + mapHeight)
+            canvas.drawRoundRect(rect, u * 0.6f, u * 0.6f, fill)
+            stroke.color = Color.argb(110, Color.red(colors.accent), Color.green(colors.accent),
+                Color.blue(colors.accent))
+            stroke.strokeWidth = u * 0.22f
+            canvas.drawRoundRect(rect, u * 0.6f, u * 0.6f, stroke)
+
+            val count = state[19].roundToInt().coerceIn(0, maxBots)
+            for (i in 0 until count) {
+                val base = botBase + i * botFloats
+                fill.color = if (state[base + 8].roundToInt() == 0) colors.allyLight else colors.enemyLight
+                canvas.drawCircle(
+                    left + (state[base] + halfWidth) / (halfWidth * 2f) * size,
+                    top + (state[base + 1] + halfHeight) / (halfHeight * 2f) * mapHeight,
+                    u * 0.3f, fill
                 )
             }
 
-            // Health and energy.
-            val barWidth = width * 0.34f
-            val barLeft = width * 0.5f - barWidth * 0.5f
-            val barTop = height - unit * 9f
-            val healthRatio = if (state[6] > 0f) (state[5] / state[6]).coerceIn(0f, 1f) else 0f
-            val energyRatio = if (state[8] > 0f) (state[7] / state[8]).coerceIn(0f, 1f) else 0f
-
-            fill.color = Color.argb(196, 8, 14, 21)
-            rect.set(barLeft - unit, barTop - unit, barLeft + barWidth + unit, barTop + unit * 6.4f)
-            canvas.drawRoundRect(rect, unit, unit, fill)
-
-            fill.color = Color.argb(190, 20, 28, 36)
-            rect.set(barLeft, barTop, barLeft + barWidth, barTop + unit * 2.4f)
-            canvas.drawRoundRect(rect, unit * 0.9f, unit * 0.9f, fill)
-            fill.color = if (healthRatio > 0.35f) Color.rgb(92, 208, 126) else Color.rgb(226, 92, 84)
-            rect.set(barLeft, barTop, barLeft + barWidth * healthRatio, barTop + unit * 2.4f)
-            canvas.drawRoundRect(rect, unit * 0.9f, unit * 0.9f, fill)
-
-            fill.color = Color.argb(190, 20, 28, 36)
-            rect.set(barLeft, barTop + unit * 3.2f, barLeft + barWidth, barTop + unit * 5f)
-            canvas.drawRoundRect(rect, unit * 0.7f, unit * 0.7f, fill)
-            fill.color = Color.rgb(96, 170, 240)
-            rect.set(barLeft, barTop + unit * 3.2f, barLeft + barWidth * energyRatio, barTop + unit * 5f)
-            canvas.drawRoundRect(rect, unit * 0.7f, unit * 0.7f, fill)
-
-            label.color = Color.WHITE
-            label.textSize = unit * 2.1f
-            canvas.drawText(
-                "${state[5].roundToInt()} / ${state[6].roundToInt()}",
-                barLeft, barTop - unit * 1.6f, label
+            fill.color = colors.accent
+            canvas.drawCircle(
+                left + (state[0] + halfWidth) / (halfWidth * 2f) * size,
+                top + (state[1] + halfHeight) / (halfHeight * 2f) * mapHeight,
+                u * 0.5f, fill
             )
-
-            drawMinimap(canvas, unit)
-            drawPauseButton(canvas, unit)
-
-            label.color = Color.argb(150, 220, 232, 242)
-            label.textSize = unit * 1.9f
-            canvas.drawText(
-                "${getString(R.string.fps)} ${fps.roundToInt()}   " +
-                    "${getString(R.string.enemies)} ${state[27].roundToInt()}",
-                unit * 2f, height - unit * 1.6f, label
-            )
-
-            if (!running) {
-                label.color = Color.argb(190, 226, 236, 244)
-                label.textSize = unit * 2.4f
-                canvas.drawText(getString(R.string.controls_hint), unit * 2f, height - unit * 4.4f, label)
-            }
         }
 
-        private fun drawMinimap(canvas: Canvas, unit: Float) {
-            val size = unit * 20f
-            val left = width - size - unit * 2f
-            val top = unit * 15f
-            val halfWidth = state[17]
-            val halfHeight = state[18]
-            if (halfWidth <= 0f || halfHeight <= 0f) return
-
-            val mapHeight = size * (halfHeight / halfWidth)
-            fill.color = Color.argb(180, 6, 12, 19)
-            rect.set(left, top, left + size, top + mapHeight)
-            canvas.drawRoundRect(rect, unit * 0.6f, unit * 0.6f, fill)
-            stroke.color = Color.argb(120, Color.red(palette.accent), Color.green(palette.accent), Color.blue(palette.accent))
-            stroke.strokeWidth = unit * 0.25f
-            canvas.drawRoundRect(rect, unit * 0.6f, unit * 0.6f, stroke)
-
-            val toX = { wx: Float -> left + (wx + halfWidth) / (halfWidth * 2f) * size }
-            val toY = { wy: Float -> top + (wy + halfHeight) / (halfHeight * 2f) * mapHeight }
-
-            if (quality >= 2) {
-                fill.color = Color.argb(120, 200, 190, 130)
-                val shapeCount = state[28].roundToInt().coerceIn(0, maxShapes)
-                for (i in 0 until shapeCount step 2) {
-                    val base = shapeBase + i * shapeFloats
-                    canvas.drawCircle(toX(state[base]), toY(state[base + 1]), unit * 0.16f, fill)
-                }
-            }
-
-            fill.color = palette.enemyLight
-            val enemyCount = state[27].roundToInt().coerceIn(0, maxEnemies)
-            for (i in 0 until enemyCount) {
-                val base = enemyBase + i * enemyFloats
-                canvas.drawCircle(toX(state[base]), toY(state[base + 1]), unit * 0.32f, fill)
-            }
-
-            fill.color = palette.accent
-            canvas.drawCircle(toX(state[0]), toY(state[1]), unit * 0.5f, fill)
-        }
-
-        private fun drawPauseButton(canvas: Canvas, unit: Float) {
-            val size = min(width, height) * 0.07f
-            val cx = width - size
-            val cy = size
+        private fun drawPauseControl(canvas: Canvas, u: Float) {
+            pauseButton(slot)
             fill.color = Color.argb(190, 8, 14, 21)
-            canvas.drawCircle(cx, cy, size * 0.62f, fill)
+            canvas.drawCircle(slot[0], slot[1], slot[2], fill)
             fill.color = Color.rgb(226, 236, 244)
-            rect.set(cx - size * 0.2f, cy - size * 0.24f, cx - size * 0.06f, cy + size * 0.24f)
+            rect.set(slot[0] - u * 1.3f, slot[1] - u * 1.6f, slot[0] - u * 0.4f, slot[1] + u * 1.6f)
             canvas.drawRect(rect, fill)
-            rect.set(cx + size * 0.06f, cy - size * 0.24f, cx + size * 0.2f, cy + size * 0.24f)
+            rect.set(slot[0] + u * 0.4f, slot[1] - u * 1.6f, slot[0] + u * 1.3f, slot[1] + u * 1.6f)
             canvas.drawRect(rect, fill)
         }
 
         private fun drawControls(canvas: Canvas) {
-            val radius = stickRadius()
-
+            val radius = min(width, height) * 0.17f
             drawStick(canvas, movePointer >= 0, moveOriginX, moveOriginY, moveX, moveY, radius,
-                width * 0.17f, height * 0.68f, getString(R.string.move))
+                width * 0.22f, height * 0.72f, getString(R.string.move))
             drawStick(canvas, aimPointer >= 0, aimOriginX, aimOriginY, aimX, aimY, radius,
-                width * 0.83f, height * 0.68f, getString(R.string.aim))
-
-            val center = FloatArray(2)
-            val buttonSize = buttonRadius()
-            for (index in 0 until 4) {
-                abilityButtonCenter(index, center)
-                val ready = cooldowns[index] >= 0.999f
-
-                fill.color = Color.argb(if (ready) 210 else 140, 8, 16, 24)
-                canvas.drawCircle(center[0], center[1], buttonSize, fill)
-
-                stroke.color = if (ready) palette.accent else Color.argb(120, 150, 170, 186)
-                stroke.strokeWidth = buttonSize * 0.1f
-                canvas.drawCircle(center[0], center[1], buttonSize, stroke)
-
-                if (!ready) {
-                    stroke.color = palette.accent
-                    rect.set(
-                        center[0] - buttonSize, center[1] - buttonSize,
-                        center[0] + buttonSize, center[1] + buttonSize
-                    )
-                    canvas.drawArc(rect, -90f, 360f * cooldowns[index], false, stroke)
-                }
-
-                drawAbilityGlyph(canvas, index, center[0], center[1], buttonSize * 0.5f, ready)
-            }
-        }
-
-        private fun drawAbilityGlyph(canvas: Canvas, index: Int, cx: Float, cy: Float, size: Float, ready: Boolean) {
-            val color = if (ready) palette.accent else Color.argb(130, 180, 195, 210)
-            stroke.color = color
-            stroke.strokeWidth = size * 0.28f
-            fill.color = color
-
-            when (index) {
-                0 -> {
-                    polygon.reset()
-                    polygon.moveTo(cx, cy - size)
-                    polygon.lineTo(cx + size * 0.8f, cy - size * 0.35f)
-                    polygon.lineTo(cx, cy + size)
-                    polygon.lineTo(cx - size * 0.8f, cy - size * 0.35f)
-                    polygon.close()
-                    canvas.drawPath(polygon, stroke)
-                }
-                1 -> {
-                    for (i in -1..1 step 2) {
-                        val offset = i * size * 0.42f
-                        polygon.reset()
-                        polygon.moveTo(cx + offset - size * 0.3f, cy - size * 0.6f)
-                        polygon.lineTo(cx + offset + size * 0.3f, cy)
-                        polygon.lineTo(cx + offset - size * 0.3f, cy + size * 0.6f)
-                        canvas.drawPath(polygon, stroke)
-                    }
-                }
-                2 -> {
-                    rect.set(cx - size * 0.28f, cy - size * 0.9f, cx + size * 0.28f, cy + size * 0.9f)
-                    canvas.drawRect(rect, fill)
-                    rect.set(cx - size * 0.9f, cy - size * 0.28f, cx + size * 0.9f, cy + size * 0.28f)
-                    canvas.drawRect(rect, fill)
-                }
-                else -> {
-                    stroke.strokeWidth = size * 0.2f
-                    canvas.drawCircle(cx, cy, size * 0.4f, stroke)
-                    canvas.drawCircle(cx, cy, size * 0.85f, stroke)
-                }
-            }
+                width * 0.8f, height * 0.72f, getString(R.string.aim))
         }
 
         private fun drawStick(
-            canvas: Canvas,
-            active: Boolean,
-            originX: Float,
-            originY: Float,
-            valueX: Float,
-            valueY: Float,
-            radius: Float,
-            restX: Float,
-            restY: Float,
-            caption: String
+            canvas: Canvas, active: Boolean, originX: Float, originY: Float,
+            valueX: Float, valueY: Float, radius: Float,
+            restX: Float, restY: Float, caption: String
         ) {
             val cx = if (active) originX else restX
             val cy = if (active) originY else restY
-            val alpha = if (active) 70 else 34
+            val alpha = if (active) 62 else 26
 
             fill.color = Color.argb(alpha, 210, 228, 240)
             canvas.drawCircle(cx, cy, radius, fill)
-            stroke.color = Color.argb(alpha + 40, 220, 234, 244)
-            stroke.strokeWidth = radius * 0.035f
+            stroke.color = Color.argb(alpha + 34, 220, 234, 244)
+            stroke.strokeWidth = radius * 0.03f
             canvas.drawCircle(cx, cy, radius, stroke)
 
-            val knobX = cx + valueX * radius * 0.72f
-            val knobY = cy + valueY * radius * 0.72f
-            fill.color = Color.argb(if (active) 200 else 90,
-                Color.red(palette.accent), Color.green(palette.accent), Color.blue(palette.accent))
-            canvas.drawCircle(knobX, knobY, radius * 0.31f, fill)
+            fill.color = Color.argb(if (active) 200 else 80,
+                Color.red(colors.accent), Color.green(colors.accent), Color.blue(colors.accent))
+            canvas.drawCircle(cx + valueX * radius * 0.72f, cy + valueY * radius * 0.72f, radius * 0.3f, fill)
 
             if (!active) {
-                label.color = Color.argb(120, 226, 238, 246)
-                label.textSize = radius * 0.22f
-                canvas.drawText(caption, cx - radius * 0.24f, cy + radius * 0.08f, label)
+                label.color = Color.argb(110, 226, 238, 246)
+                label.textSize = radius * 0.2f
+                canvas.drawText(caption, cx - radius * 0.22f, cy + radius * 0.07f, label)
+            }
+        }
+
+        private fun drawEvolveOverlay(canvas: Canvas) {
+            val u = unit()
+            fill.color = Color.argb(170, 3, 7, 12)
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
+
+            label.color = colors.accent
+            label.textSize = u * 3.4f
+            val title = getString(R.string.choose_evolution)
+            canvas.drawText(title, width * 0.5f - title.length * u * 0.9f, height * 0.22f, label)
+
+            val count = state[35].roundToInt().coerceIn(0, 4)
+            val cardWidth = width * 0.19f
+            val gap = width * 0.02f
+            val total = count * cardWidth + max(0, count - 1) * gap
+            val top = height * 0.3f
+            val cardHeight = height * 0.4f
+
+            for (index in 0 until count) {
+                val id = state[36 + index].roundToInt()
+                val left = width * 0.5f - total * 0.5f + index * (cardWidth + gap)
+
+                fill.color = Color.argb(238, 10, 18, 26)
+                rect.set(left, top, left + cardWidth, top + cardHeight)
+                canvas.drawRoundRect(rect, u * 1.2f, u * 1.2f, fill)
+                stroke.color = colors.accent
+                stroke.strokeWidth = u * 0.28f
+                canvas.drawRoundRect(rect, u * 1.2f, u * 1.2f, stroke)
+
+                canvas.save()
+                canvas.translate(left + cardWidth * 0.5f, top + cardHeight * 0.44f)
+                val scale = cardWidth / 400f
+                canvas.scale(scale, scale)
+                painter.draw(canvas, tankGeometry(id), barrelStride, 44f, -90f, -90f, 0f,
+                    colors.ally, colors.allyLight, colors.barrel, 0f)
+                canvas.restore()
+
+                label.color = Color.rgb(232, 240, 248)
+                label.textSize = u * 2.1f
+                val name = tankName(id)
+                canvas.drawText(name, left + cardWidth * 0.5f - name.length * u * 0.55f,
+                    top + cardHeight * 0.86f, label)
+                label.color = colors.accent
+                label.textSize = u * 1.7f
+                canvas.drawText("T${tankInfo(id)[0]}", left + cardWidth * 0.5f - u * 1.1f,
+                    top + cardHeight * 0.95f, label)
+            }
+        }
+
+        private fun drawCheatOverlay(canvas: Canvas) {
+            val u = unit()
+            fill.color = Color.argb(228, 3, 7, 12)
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
+
+            label.color = Color.rgb(240, 118, 118)
+            label.textSize = u * 2.9f
+            canvas.drawText(getString(R.string.cheat_menu), width * 0.06f, height * 0.075f, label)
+            label.color = Color.argb(160, 210, 224, 236)
+            label.textSize = u * 1.7f
+            canvas.drawText(getString(R.string.cheat_hint), width * 0.06f, height * 0.112f, label)
+
+            val columns = 4
+            val rows = 7
+            val left = width * 0.06f
+            val top = height * 0.13f
+            val cellWidth = width * 0.88f / columns
+            val cellHeight = height * 0.72f / rows
+            val total = cheatToggleCount + cheatActionCount
+
+            for (cell in 0 until min(total, columns * rows)) {
+                val cellLeft = left + (cell % columns) * cellWidth
+                val cellTop = top + (cell / columns) * cellHeight
+                val isToggle = cell < cheatToggleCount
+                val on = isToggle && cheatState[cell]
+
+                fill.color = when {
+                    on -> Color.argb(232, 26, 74, 46)
+                    isToggle -> Color.argb(226, 14, 22, 30)
+                    else -> Color.argb(232, 54, 26, 26)
+                }
+                rect.set(cellLeft + u * 0.5f, cellTop + u * 0.5f,
+                    cellLeft + cellWidth - u * 0.5f, cellTop + cellHeight - u * 0.5f)
+                canvas.drawRoundRect(rect, u * 0.8f, u * 0.8f, fill)
+
+                stroke.color = if (on) Color.rgb(120, 226, 150) else Color.argb(88, 150, 168, 184)
+                stroke.strokeWidth = u * 0.16f
+                canvas.drawRoundRect(rect, u * 0.8f, u * 0.8f, stroke)
+
+                val name = if (isToggle) {
+                    cheatLabels.getOrElse(cell) { "?" }
+                } else {
+                    actionLabels.getOrElse(cell - cheatToggleCount) { "?" }
+                }
+
+                label.color = if (on) Color.rgb(150, 240, 176) else Color.rgb(220, 230, 240)
+                label.textSize = u * 1.7f
+                canvas.drawText(name, cellLeft + u * 1.4f, cellTop + cellHeight * 0.46f, label)
+
+                label.color = Color.argb(170, 190, 206, 220)
+                label.textSize = u * 1.45f
+                canvas.drawText(
+                    if (isToggle) {
+                        if (on) getString(R.string.on) else getString(R.string.off)
+                    } else {
+                        getString(R.string.run_action)
+                    },
+                    cellLeft + u * 1.4f, cellTop + cellHeight * 0.78f, label
+                )
+            }
+
+            label.color = Color.argb(190, 220, 232, 242)
+            label.textSize = u * 2f
+            canvas.drawText(getString(R.string.close), width * 0.06f, height * 0.94f, label)
+        }
+
+        private fun drawPanelOverlay(canvas: Canvas, title: String, detail: String?) {
+            val u = unit()
+            fill.color = Color.argb(198, 3, 7, 12)
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
+
+            label.color = colors.accent
+            label.textSize = u * 4.6f
+            canvas.drawText(title, width * 0.5f - title.length * u * 1.25f, height * 0.34f, label)
+
+            if (detail != null) {
+                label.color = Color.rgb(224, 234, 242)
+                label.textSize = u * 2.3f
+                canvas.drawText(detail, width * 0.5f - detail.length * u * 0.6f, height * 0.44f, label)
+            }
+
+            val captions = overlayCaptions()
+            val buttonWidth = width * 0.2f
+            val gap = width * 0.02f
+            val total = captions.size * buttonWidth + (captions.size - 1) * gap
+            val top = height * 0.58f
+
+            for (index in captions.indices) {
+                val left = width * 0.5f - total * 0.5f + index * (buttonWidth + gap)
+                fill.color = Color.argb(238, 14, 26, 38)
+                rect.set(left, top, left + buttonWidth, top + u * 9f)
+                canvas.drawRoundRect(rect, u, u, fill)
+                stroke.color = colors.accent
+                stroke.strokeWidth = u * 0.2f
+                canvas.drawRoundRect(rect, u, u, stroke)
+
+                label.color = Color.rgb(232, 240, 248)
+                label.textSize = u * 2.1f
+                val caption = captions[index]
+                canvas.drawText(caption, left + buttonWidth * 0.5f - caption.length * u * 0.58f,
+                    top + u * 5.4f, label)
             }
         }
     }
 
-    // ---------------------------------------------------------------- preview view
-
-    /** Self-contained animated preview used by the garage and the ability screen. */
-    inner class PreviewView(private val kind: Int) : View(this@Engine) {
+    inner class TankPreviewView(private val tankId: Int) : View(this@Engine) {
 
         private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
         private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
         private val rect = RectF()
-        private val path = Path()
+        private val painter = TankPainter()
         private var time = 0f
         private var lastNanos = SystemClock.elapsedRealtimeNanos()
         private var animating = true
-
-        var abilityIndex = 0
-            set(value) {
-                field = value
-                time = 0f
-                invalidate()
-            }
-
-        var hullIndex = 0
-            set(value) {
-                field = value
-                invalidate()
-            }
-
-        var shaderIndex = 0
-            set(value) {
-                field = value
-                invalidate()
-            }
 
         fun pause() {
             animating = false
@@ -1650,174 +1719,37 @@ class Engine : ComponentActivity() {
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             val now = SystemClock.elapsedRealtimeNanos()
-            val delta = ((now - lastNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
+            time += ((now - lastNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
             lastNanos = now
-            time += delta
 
-            val colors = Palette.of(if (kind == PREVIEW_TANK) shaderIndex else shaderMode)
-
-            fill.color = Color.argb(230, 8, 14, 22)
+            val colors = theme()
+            val corner = dp(10).toFloat()
             rect.set(0f, 0f, width.toFloat(), height.toFloat())
-            canvas.drawRoundRect(rect, dp(10).toFloat(), dp(10).toFloat(), fill)
+            fill.shader = LinearGradient(0f, 0f, 0f, height.toFloat(),
+                Color.rgb(12, 20, 30), Color.rgb(5, 9, 15), Shader.TileMode.CLAMP)
+            canvas.drawRoundRect(rect, corner, corner, fill)
+            fill.shader = null
 
-            stroke.color = Color.argb(70, Color.red(colors.accent), Color.green(colors.accent), Color.blue(colors.accent))
+            stroke.color = Color.argb(70, Color.red(colors.accent), Color.green(colors.accent),
+                Color.blue(colors.accent))
             stroke.strokeWidth = 2f
-            canvas.drawRoundRect(rect, dp(10).toFloat(), dp(10).toFloat(), stroke)
-
-            val cx = width * 0.5f
-            val cy = height * 0.5f
-            val scale = min(width, height) / 260f
+            canvas.drawRoundRect(rect, corner, corner, stroke)
 
             canvas.save()
-            canvas.translate(cx, cy)
+            canvas.translate(width * 0.5f, height * 0.5f)
+            val scale = min(width, height) / 320f
             canvas.scale(scale, scale)
-
-            if (kind == PREVIEW_ABILITY) drawAbilityStage(canvas, colors)
-            drawTank(canvas, colors)
-            if (kind == PREVIEW_ABILITY) drawAbilityOverlay(canvas, colors)
-
+            painter.draw(canvas, tankGeometry(tankId), barrelStride, 44f,
+                sin(time * 0.6f) * 14f, sin(time * 0.9f) * 26f,
+                max(0f, sin(time * 3.2f)) * 0.4f,
+                colors.ally, colors.allyLight, colors.barrel, 0f)
             canvas.restore()
 
             if (animating) postInvalidateOnAnimation()
         }
-
-        private fun drawTank(canvas: Canvas, colors: Palette) {
-            val barrels = if (hullIndex == 2) 2 else 1
-            val bob = sin(time * 1.6f) * 3f
-            val turret = sin(time * 0.8f) * 22f
-
-            canvas.save()
-            canvas.translate(0f, bob)
-
-            fill.color = colors.tread
-            rect.set(-56f, -54f, 56f, -36f)
-            canvas.drawRoundRect(rect, 8f, 8f, fill)
-            rect.set(-56f, 36f, 56f, 54f)
-            canvas.drawRoundRect(rect, 8f, 8f, fill)
-
-            fill.color = darken(colors.tread, 0.65f)
-            var tread = -56f + (time * 26f) % 16f
-            while (tread < 56f) {
-                canvas.drawRect(tread, -54f, tread + 5f, -36f, fill)
-                canvas.drawRect(tread, 36f, tread + 5f, 54f, fill)
-                tread += 16f
-            }
-
-            fill.shader = LinearGradient(0f, -40f, 0f, 40f, colors.hullLight, colors.hull, Shader.TileMode.CLAMP)
-            rect.set(if (hullIndex == 1) -46f else -52f, -40f, if (hullIndex == 1) 46f else 52f, 40f)
-            canvas.drawRoundRect(rect, 14f, 14f, fill)
-            fill.shader = null
-            stroke.color = darken(colors.hull, 0.55f)
-            stroke.strokeWidth = 5f
-            canvas.drawRoundRect(rect, 14f, 14f, stroke)
-
-            canvas.save()
-            canvas.rotate(turret)
-            fill.color = darken(colors.turret, 0.7f)
-            if (barrels == 1) {
-                rect.set(-12f, -15f, 96f, 15f)
-                canvas.drawRoundRect(rect, 6f, 6f, fill)
-            } else {
-                rect.set(-12f, -30f, 88f, -6f)
-                canvas.drawRoundRect(rect, 6f, 6f, fill)
-                rect.set(-12f, 6f, 88f, 30f)
-                canvas.drawRoundRect(rect, 6f, 6f, fill)
-            }
-            fill.color = colors.turret
-            canvas.drawCircle(0f, 0f, 34f, fill)
-            stroke.color = darken(colors.hull, 0.5f)
-            canvas.drawCircle(0f, 0f, 34f, stroke)
-            canvas.restore()
-            canvas.restore()
-        }
-
-        private fun drawAbilityStage(canvas: Canvas, colors: Palette) {
-            // Two sparring targets so the effect has something to act on.
-            val sweep = sin(time * 0.9f) * 40f
-            for (side in intArrayOf(-1, 1)) {
-                fill.color = darken(colors.enemy, 0.75f)
-                rect.set(side * 150f - 26f + sweep, -24f, side * 150f + 26f + sweep, 24f)
-                canvas.drawRoundRect(rect, 8f, 8f, fill)
-                fill.color = colors.enemyLight
-                canvas.drawCircle(side * 150f + sweep, 0f, 14f, fill)
-            }
-        }
-
-        private fun drawAbilityOverlay(canvas: Canvas, colors: Palette) {
-            val cycle = (time % 3f) / 3f
-
-            when (abilityIndex) {
-                0 -> {
-                    val radius = 78f + sin(time * 4f) * 5f
-                    stroke.shader = SweepGradient(
-                        0f, 0f,
-                        intArrayOf(colors.accent, Color.TRANSPARENT, colors.accent, Color.TRANSPARENT, colors.accent),
-                        null
-                    )
-                    stroke.strokeWidth = 9f
-                    canvas.save()
-                    canvas.rotate(time * 110f)
-                    canvas.drawCircle(0f, 0f, radius, stroke)
-                    canvas.restore()
-                    stroke.shader = null
-
-                    fill.color = Color.argb(46, Color.red(colors.accent), Color.green(colors.accent), Color.blue(colors.accent))
-                    canvas.drawCircle(0f, 0f, radius, fill)
-                }
-
-                1 -> {
-                    for (i in 0 until 8) {
-                        val progress = ((cycle + i / 8f) % 1f)
-                        val alpha = ((1f - progress) * 200f).roundToInt().coerceIn(0, 200)
-                        fill.color = Color.argb(alpha, 255, 198, 96)
-                        val trail = -70f - progress * 120f
-                        canvas.drawCircle(trail, sin(i.toFloat()) * 22f, 9f * (1f - progress) + 3f, fill)
-                    }
-                    stroke.color = Color.argb(190, 255, 206, 118)
-                    stroke.strokeWidth = 5f
-                    canvas.drawCircle(0f, 0f, 66f + sin(time * 10f) * 4f, stroke)
-                }
-
-                2 -> {
-                    for (i in 0 until 6) {
-                        val progress = ((cycle + i / 6f) % 1f)
-                        val alpha = ((1f - progress) * 220f).roundToInt().coerceIn(0, 220)
-                        fill.color = Color.argb(alpha, 128, 232, 156)
-                        val rise = 60f - progress * 130f
-                        val offset = sin((i + time) * 1.4f) * 44f
-                        path.reset()
-                        path.moveTo(offset - 9f, rise)
-                        path.lineTo(offset + 9f, rise)
-                        path.lineTo(offset + 9f, rise - 26f)
-                        path.lineTo(offset + 22f, rise - 26f)
-                        path.lineTo(offset, rise - 46f)
-                        path.lineTo(offset - 22f, rise - 26f)
-                        path.lineTo(offset - 9f, rise - 26f)
-                        path.close()
-                        canvas.drawPath(path, fill)
-                    }
-                }
-
-                else -> {
-                    for (i in 0 until 3) {
-                        val progress = ((cycle + i / 3f) % 1f)
-                        val alpha = ((1f - progress) * 170f).roundToInt().coerceIn(0, 170)
-                        stroke.color = Color.argb(alpha, 122, 200, 255)
-                        stroke.strokeWidth = 5f
-                        canvas.drawCircle(0f, 0f, 40f + progress * 170f, stroke)
-                    }
-                    stroke.color = Color.argb(190, 122, 200, 255)
-                    canvas.save()
-                    canvas.rotate(time * 190f)
-                    canvas.drawLine(0f, 0f, 150f, 0f, stroke)
-                    canvas.restore()
-                }
-            }
-        }
     }
 
-    /** Thin horizontal meter used inside the menus. */
-    inner class BarView(private val ratio: Float) : View(this@Engine) {
+    inner class MeterView(private val ratio: Float) : View(this@Engine) {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val bounds = RectF()
 
@@ -1827,14 +1759,12 @@ class Engine : ComponentActivity() {
             paint.color = Color.argb(180, 22, 32, 42)
             bounds.set(0f, 0f, width.toFloat(), height.toFloat())
             canvas.drawRoundRect(bounds, radius, radius, paint)
-
-            paint.color = currentPalette().accent
-            bounds.set(0f, 0f, width * ratio.coerceIn(0f, 1f), height.toFloat())
+            paint.color = theme().accent
+            bounds.set(0f, 0f, width * ratio.coerceIn(0.03f, 1f), height.toFloat())
             canvas.drawRoundRect(bounds, radius, radius, paint)
         }
     }
 
-    /** Ignores the selection callback the spinner fires while it is being populated. */
     private class SelectionListener(
         private var current: Int,
         private val callback: (Int) -> Unit
@@ -1855,8 +1785,11 @@ class Engine : ComponentActivity() {
     }
 }
 
-private const val PREVIEW_TANK = 0
-private const val PREVIEW_ABILITY = 1
+private const val OVERLAY_NONE = 0
+private const val OVERLAY_PAUSE = 1
+private const val OVERLAY_EVOLVE = 2
+private const val OVERLAY_CHEATS = 3
+private const val OVERLAY_RESULT = 4
 
 private fun blend(from: Int, to: Int, amount: Float): Int {
     val t = amount.coerceIn(0f, 1f)
